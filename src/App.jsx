@@ -131,24 +131,35 @@ function countTokens(text) {
 }
 
 async function callGroq(messages) {
-  const response = await fetch("/api/enhance", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messages,
-      systemPrompt: SYSTEM_PROMPT,
-    }),
-  });
-  const data = await response.json();
-  // Qwen3 may prefix a <think>...</think> block before JSON — strip it.
-  const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
-  const text = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   try {
-    return JSON.parse(text);
-  } catch {
-    return { type: "enhanced", enhancedPrompt: text || raw, improvements: [], tags: [] };
+    const response = await fetch("/api/enhance", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages,
+        systemPrompt: SYSTEM_PROMPT,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      const errMsg = data.error?.message || data.error || response.statusText || "Unknown API error";
+      return { type: "enhanced", enhancedPrompt: `⚠️ API Error: ${errMsg}`, improvements: ["Check your GROQ_API_KEY environment variable in Vercel"], tags: ["Error"] };
+    }
+    // Qwen3 may prefix a <think>...</think> block before JSON — strip it.
+    const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!raw) {
+      return { type: "enhanced", enhancedPrompt: "⚠️ The model returned an empty response. Please try again.", improvements: [], tags: ["Error"] };
+    }
+    const text = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { type: "enhanced", enhancedPrompt: text || raw, improvements: [], tags: [] };
+    }
+  } catch (err) {
+    return { type: "enhanced", enhancedPrompt: `⚠️ Network Error: ${err.message}`, improvements: [], tags: ["Error"] };
   }
 }
 
