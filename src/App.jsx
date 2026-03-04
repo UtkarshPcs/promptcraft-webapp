@@ -145,7 +145,7 @@ async function callGroq(messages) {
     const data = await response.json();
     if (!response.ok || data.error) {
       const errMsg = data.error?.message || data.error || response.statusText || "Unknown API error";
-      return { type: "enhanced", enhancedPrompt: \`⚠️ API Error: \${errMsg}\`, improvements: ["Check your GROQ_API_KEY environment variable in Vercel"], tags: ["Error"] };
+      return { type: "enhanced", enhancedPrompt: `⚠️ API Error: ${errMsg}`, improvements: ["Check your GROQ_API_KEY environment variable in Vercel"], tags: ["Error"] };
     }
     // Qwen3 may prefix a <think>...</think> block before JSON — strip it.
     const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
@@ -159,7 +159,7 @@ async function callGroq(messages) {
       return { type: "enhanced", enhancedPrompt: text || raw, improvements: [], tags: [] };
     }
   } catch (err) {
-    return { type: "enhanced", enhancedPrompt: \`⚠️ Network Error: \${err.message}\`, improvements: [], tags: ["Error"] };
+    return { type: "enhanced", enhancedPrompt: `⚠️ Network Error: ${err.message}`, improvements: [], tags: ["Error"] };
   }
 }
 
@@ -171,18 +171,18 @@ export default function App() {
   const [preview, setPreview] = useState("");
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
-  
+
   // LocalStorage persistence for history
   const [history, setHistory] = useState(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("promptcraft_history");
       if (saved) {
-        try { return JSON.parse(saved); } catch (e) {}
+        try { return JSON.parse(saved); } catch (e) { }
       }
     }
     return [];
   });
-  
+
   const [copied, setCopied] = useState(false); // Can be false, "markdown", "plain", or "txt"
   const [charCount, setCharCount] = useState(0);
   const [outputTokens, setOutputTokens] = useState(0);
@@ -222,8 +222,8 @@ export default function App() {
   }
 
   async function handleAnswers() {
-    const answersText = questions.map((q, i) => \`\${q} → \${answers[i] || "(skipped)"}\`).join("\\n");
-    const combined = \`\${input}\\n\\nAdditional context:\\n\${answersText}\`;
+    const answersText = questions.map((q, i) => `${q} → ${answers[i] || "(skipped)"}`).join("\n");
+    const combined = `${input}\n\nAdditional context:\n${answersText}`;
     setStage("loading");
     setOutputTokens(0);
     const res = await callGroq([{ role: "user", content: combined }]);
@@ -250,7 +250,7 @@ export default function App() {
 
   function copyPlaintext() {
     // Basic regex to strip markdown bolding/italics/code blocks
-    const plain = (result?.enhancedPrompt || "").replace(/[*#_\`]/g, "");
+    const plain = (result?.enhancedPrompt || "").replace(/[*#_`]/g, "");
     navigator.clipboard.writeText(plain);
     setCopied("plain");
     setTimeout(() => setCopied(false), 2000);
@@ -271,7 +271,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#0A0A0A", color: "#CCCCCC", position: "relative", zIndex: 0, overflowX: "hidden" }}>
-      <style>{\`
+      <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -410,7 +410,7 @@ export default function App() {
         .q-block:last-child { border-bottom: none; }
 
         .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: #4DFFB4; display: inline-block; }
-      \`}</style>
+      `}</style>
 
       {/* Animated Hero Background */}
       <div className="hero-bg" />
@@ -436,7 +436,7 @@ export default function App() {
       </nav>
 
       <main style={{ maxWidth: "660px", margin: "0 auto", padding: "0 24px 100px" }}>
-        
+
         {/* ── HOME VIEW ── */}
         {view === "home" && (
           <>
@@ -469,7 +469,7 @@ export default function App() {
 
             {/* ── INPUT ── */}
             {(stage === "idle" || stage === "loading") && (
-              <div className={\`card fade-in \${stage === "idle" ? "s5" : ""}\`} style={{ padding: "24px 28px" }}>
+              <div className={`card fade-in ${stage === "idle" ? "s5" : ""}`} style={{ padding: "24px 28px" }}>
 
                 <div className="font-mono" style={{ fontSize: "10px", color: "#2A2A2A", letterSpacing: "0.14em", marginBottom: "16px" }}>
                   YOUR RAW INPUT
@@ -480,7 +480,7 @@ export default function App() {
                   ref={textareaRef}
                   value={input}
                   onChange={e => setInput(e.target.value)}
-                  placeholder={"write something for my newsletter...\\nhelp me ask AI to review my code...\\nmake a logo brief for my startup..."}
+                  placeholder={"write something for my newsletter...\nhelp me ask AI to review my code...\nmake a logo brief for my startup..."}
                   onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleEnhance(); }}
                   disabled={stage === "loading"}
                 />
@@ -623,7 +623,7 @@ export default function App() {
                       <div className="font-mono" style={{ fontSize: "10px", color: "#4DFFB4", letterSpacing: "0.12em", marginBottom: "5px" }}>ENHANCED PROMPT</div>
                       <div className="font-sora" style={{ fontSize: "18px", fontWeight: 600, color: "#F5F5F5", letterSpacing: "-0.025em" }}>Ready to use</div>
                     </div>
-                    
+
                     <div style={{ display: "flex", gap: "8px" }}>
                       {/* Export Dropdown equivalent (buttons row) */}
                       <button className="btn-s" onClick={copyPlaintext} title="Copy as Plaintext" style={{ padding: "0 14px" }}>
@@ -643,7 +643,7 @@ export default function App() {
                   <p className="font-dm" style={{ fontSize: "15px", lineHeight: 1.8, color: "#CCCCCC", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                     {result.enhancedPrompt}
                   </p>
-                  
+
                   {/* Output token count */}
                   {outputTokens > 0 && (
                     <>
@@ -727,11 +727,11 @@ export default function App() {
               <ArrowRight size={14} style={{ transform: "rotate(180deg)" }} />
               <span className="font-dm" style={{ fontSize: "14px", fontWeight: 500 }}>Back to App</span>
             </div>
-            
+
             <h2 className="font-sora" style={{ fontSize: "32px", fontWeight: 600, color: "#F5F5F5", marginBottom: "40px", letterSpacing: "-0.02em" }}>
               Updates & Changelog
             </h2>
-            
+
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
