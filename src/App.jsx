@@ -183,7 +183,7 @@ export default function App() {
     return [];
   });
 
-  const [copied, setCopied] = useState(false); // Can be false, "markdown", "plain", or "txt"
+  const [copied, setCopied] = useState(false); // Can be false, "text", or "txt"
   const [charCount, setCharCount] = useState(0);
   const [outputTokens, setOutputTokens] = useState(0);
   const textareaRef = useRef(null);
@@ -242,17 +242,9 @@ export default function App() {
   }
 
   // --- Export Actions ---
-  function copyMarkdown() {
+  function handleCopy() {
     navigator.clipboard.writeText(result?.enhancedPrompt || "");
-    setCopied("markdown");
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  function copyPlaintext() {
-    // Basic regex to strip markdown bolding/italics/code blocks
-    const plain = (result?.enhancedPrompt || "").replace(/[*#_`]/g, "");
-    navigator.clipboard.writeText(plain);
-    setCopied("plain");
+    setCopied("text");
     setTimeout(() => setCopied(false), 2000);
   }
 
@@ -428,7 +420,7 @@ export default function App() {
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.1.1</span>
+            <span className="tag tag-g">v 1.1.2</span>
           </div>
         </div>
       </nav>
@@ -623,15 +615,11 @@ export default function App() {
                     </div>
 
                     <div style={{ display: "flex", gap: "8px" }}>
-                      {/* Export Dropdown equivalent (buttons row) */}
-                      <button className="btn-s" onClick={copyPlaintext} title="Copy as Plaintext" style={{ padding: "0 14px" }}>
-                        {copied === "plain" ? <Check size={14} color="#4DFFB4" /> : <Layers size={14} />}
-                      </button>
                       <button className="btn-s" onClick={downloadTxt} title="Download .txt" style={{ padding: "0 14px" }}>
                         {copied === "txt" ? <Check size={14} color="#4DFFB4" /> : <Download size={14} />}
                       </button>
-                      <button className="btn-p" onClick={copyMarkdown} style={{ minWidth: "96px" }}>
-                        {copied === "markdown" ? <><Check size={13} />Copied!</> : <><Copy size={13} />Copy</>}
+                      <button className="btn-p" onClick={handleCopy} style={{ minWidth: "96px" }}>
+                        {copied === "text" ? <><Check size={13} />Copied!</> : <><Copy size={13} />Copy</>}
                       </button>
                     </div>
                   </div>
@@ -733,12 +721,24 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.1.1</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.1.2</span>
                   <span className="tag tag-g">LATEST</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
               </div>
               <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Simplified Export</strong> — Removed the Copy as Plaintext button for a cleaner, less cluttered export bar.</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.1.1</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#888888", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
                 <li><strong>Brand Identity</strong> — Added the official PromptCraft logo to navigation and application files.</li>
               </ul>
             </div>
@@ -777,7 +777,7 @@ export default function App() {
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.1.1</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.1.2</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
