@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList } from "lucide-react";
+import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle } from "lucide-react";
 
 const SYSTEM_PROMPT = `# Prompt Enhancer Skill
 
@@ -122,6 +122,43 @@ When you have enough context to enhance, return ONLY:
 
 NEVER return anything outside of these two JSON structures. NEVER wrap in markdown code fences.`;
 
+const REFINE_SYSTEM_PROMPT = `# Prompt Refiner
+
+You are a precision prompt editor. You are given an existing enhanced prompt and a user's modification request.
+
+## Your Job
+
+1. Read the existing enhanced prompt carefully.
+2. Read the user's refinement instruction.
+3. Apply ONLY the requested changes — do not rewrite or restructure anything else.
+4. Preserve the quality, structure, formatting, and intent of the original enhanced prompt.
+
+## Rules
+
+- If the user says "add X": Insert X naturally into the existing prompt at the most logical position.
+- If the user says "remove X": Delete X from the prompt while keeping the rest coherent.
+- If the user says "change X to Y": Replace X with Y precisely.
+- If the user gives a vague instruction like "make it better": Apply a small, targeted improvement without overhauling.
+- NEVER reduce the quality or completeness of the prompt.
+- Keep the same tone, format, and structure unless explicitly asked to change it.
+
+## Contradiction Detection
+
+If the user's modification directly contradicts the core intent of the original prompt (e.g., original says "formal tone" but user says "make it casual" without removing the formal constraint), return a clarification question:
+{"type":"questions","questions":["Your question about the contradiction"],"preview":"Brief explanation of what conflicts"}
+
+## MANDATORY OUTPUT FORMAT
+
+You MUST always respond with ONLY valid JSON. No markdown, no backticks, no preamble.
+
+When you can apply the refinement:
+{"type":"enhanced","enhancedPrompt":"The full updated prompt with changes applied","improvements":["What was changed 1","What was changed 2"],"tags":["tag1","tag2"]}
+
+When you need clarification about a contradiction:
+{"type":"questions","questions":["Clarifying question"],"preview":"Explanation of the detected contradiction"}
+
+NEVER return anything outside of these two JSON structures.`;
+
 // API key is secured in the backend (api/enhance.js) via environment variables
 
 // Rough token estimate: ~4 chars per token (same heuristic most LLM UIs use)
@@ -130,7 +167,7 @@ function countTokens(text) {
   return Math.ceil(text.length / 4);
 }
 
-async function callGroq(messages) {
+async function callGroq(messages, sysPrompt = SYSTEM_PROMPT) {
   try {
     const response = await fetch("/api/enhance", {
       method: "POST",
@@ -139,7 +176,7 @@ async function callGroq(messages) {
       },
       body: JSON.stringify({
         messages,
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt: sysPrompt,
       }),
     });
     const data = await response.json();
@@ -187,6 +224,14 @@ export default function App() {
   const [charCount, setCharCount] = useState(0);
   const [outputTokens, setOutputTokens] = useState(0);
   const textareaRef = useRef(null);
+
+  // Refiner state
+  const [refineInput, setRefineInput] = useState("");
+  const [refineCount, setRefineCount] = useState(0);
+  const [refineLoading, setRefineLoading] = useState(false);
+  const [refineClarify, setRefineClarify] = useState(null); // { questions, preview }
+  const [refineClarifyAnswer, setRefineClarifyAnswer] = useState("");
+  const refineRef = useRef(null);
 
   useEffect(() => {
     if (textareaRef.current && view === "home") {
@@ -239,6 +284,46 @@ export default function App() {
     setResult(null);
     setQuestions([]);
     setAnswers({});
+    setRefineInput("");
+    setRefineCount(0);
+    setRefineLoading(false);
+    setRefineClarify(null);
+    setRefineClarifyAnswer("");
+  }
+
+  // --- Refine Handler ---
+  async function handleRefine() {
+    if (!refineInput.trim() || !result?.enhancedPrompt) return;
+    setRefineLoading(true);
+    setRefineClarify(null);
+    const refineMessage = `## Current Enhanced Prompt\n\n${result.enhancedPrompt}\n\n## User's Modification Request\n\n${refineInput}`;
+    const res = await callGroq([{ role: "user", content: refineMessage }], REFINE_SYSTEM_PROMPT);
+    if (res.type === "questions") {
+      setRefineClarify({ questions: res.questions, preview: res.preview });
+      setRefineLoading(false);
+    } else {
+      setResult(res);
+      setOutputTokens(countTokens(res.enhancedPrompt));
+      setRefineCount(c => c + 1);
+      setRefineInput("");
+      setRefineLoading(false);
+      setHistory(h => [{ input, result: res }, ...h.slice(0, 9)]);
+    }
+  }
+
+  async function handleRefineClarifySubmit() {
+    if (!refineClarifyAnswer.trim()) return;
+    setRefineLoading(true);
+    const refineMessage = `## Current Enhanced Prompt\n\n${result.enhancedPrompt}\n\n## User's Original Modification Request\n\n${refineInput}\n\n## User's Clarification\n\n${refineClarifyAnswer}`;
+    const res = await callGroq([{ role: "user", content: refineMessage }], REFINE_SYSTEM_PROMPT);
+    setResult(res);
+    setOutputTokens(countTokens(res.enhancedPrompt));
+    setRefineCount(c => c + 1);
+    setRefineInput("");
+    setRefineClarify(null);
+    setRefineClarifyAnswer("");
+    setRefineLoading(false);
+    setHistory(h => [{ input, result: res }, ...h.slice(0, 9)]);
   }
 
   // --- Export Actions ---
@@ -400,6 +485,31 @@ export default function App() {
 
         .q-block { padding: 16px 0; border-bottom: 1px solid #181818; }
         .q-block:last-child { border-bottom: none; }
+
+        .refine-bar {
+          display: flex; align-items: center; gap: 10px;
+          padding: 12px 16px; background: #111; border: 1px solid #1E1E1E;
+          border-radius: 8px; transition: border-color 0.2s;
+        }
+        .refine-bar:focus-within { border-color: #4DFFB4; }
+        .refine-input {
+          flex: 1; background: transparent; border: none; outline: none;
+          color: #CCCCCC; font-family: 'DM Sans', sans-serif; font-size: 14px;
+          line-height: 1.5;
+        }
+        .refine-input::placeholder { color: #333; }
+        .refine-send {
+          width: 32px; height: 32px; border-radius: 6px; border: 1px solid #222;
+          background: transparent; color: #4DFFB4; cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          transition: background 0.2s, border-color 0.2s;
+        }
+        .refine-send:hover { background: rgba(77,255,180,0.08); border-color: #4DFFB4; }
+        .refine-send:disabled { opacity: 0.3; cursor: not-allowed; }
+        .refine-clarify {
+          margin-top: 12px; padding: 16px; background: rgba(77,255,180,0.03);
+          border: 1px solid #1E3A2A; border-radius: 8px;
+        }
       `}</style>
 
       {/* Animated Hero Background */}
@@ -420,7 +530,7 @@ export default function App() {
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.1.2</span>
+            <span className="tag tag-g">v 1.2.0</span>
           </div>
         </div>
       </nav>
@@ -675,9 +785,72 @@ export default function App() {
                 )}
 
                 {/* Original */}
-                <div style={{ padding: "14px 18px", border: "1px solid #161616", borderRadius: "6px" }}>
+                <div style={{ padding: "14px 18px", border: "1px solid #161616", borderRadius: "6px", marginBottom: "18px" }}>
                   <div className="font-mono" style={{ fontSize: "10px", color: "#252525", letterSpacing: "0.1em", marginBottom: "6px" }}>ORIGINAL INPUT</div>
                   <p className="font-dm" style={{ fontSize: "13px", color: "#3A3A3A", lineHeight: 1.6, fontStyle: "italic" }}>{input}</p>
+                </div>
+
+                {/* ── REFINE SECTION ── */}
+                <div className="card" style={{ padding: "20px 24px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
+                    <Wand2 size={14} color="#4DFFB4" />
+                    <span className="font-mono" style={{ fontSize: "10px", color: "#4DFFB4", letterSpacing: "0.12em" }}>
+                      REFINE PROMPT {refineCount > 0 && <span style={{ color: "#666" }}>· v{refineCount + 1}</span>}
+                    </span>
+                  </div>
+
+                  <div className="refine-bar">
+                    <input
+                      ref={refineRef}
+                      className="refine-input"
+                      placeholder="Add, remove, or change something..."
+                      value={refineInput}
+                      onChange={e => setRefineInput(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleRefine()}
+                      disabled={refineLoading}
+                    />
+                    <button className="refine-send" onClick={handleRefine} disabled={refineLoading || !refineInput.trim()}>
+                      {refineLoading ? <span className="dot" /> : <Send size={14} />}
+                    </button>
+                  </div>
+
+                  {refineLoading && (
+                    <div style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span className="dot" /><span className="dot" /><span className="dot" />
+                      <span className="font-dm" style={{ fontSize: "13px", color: "#444" }}>Refining your prompt...</span>
+                    </div>
+                  )}
+
+                  {refineClarify && (
+                    <div className="refine-clarify">
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                        <AlertTriangle size={14} color="#FFD666" />
+                        <span className="font-mono" style={{ fontSize: "10px", color: "#FFD666", letterSpacing: "0.1em" }}>CONTRADICTION DETECTED</span>
+                      </div>
+                      {refineClarify.preview && (
+                        <p className="font-dm" style={{ fontSize: "13px", color: "#888", marginBottom: "12px", lineHeight: 1.6 }}>{refineClarify.preview}</p>
+                      )}
+                      {refineClarify.questions.map((q, i) => (
+                        <p key={i} className="font-dm" style={{ fontSize: "14px", color: "#CCCCCC", marginBottom: "12px", lineHeight: 1.6 }}>{q}</p>
+                      ))}
+                      <div className="refine-bar" style={{ marginTop: "10px" }}>
+                        <input
+                          className="refine-input"
+                          placeholder="Your answer..."
+                          value={refineClarifyAnswer}
+                          onChange={e => setRefineClarifyAnswer(e.target.value)}
+                          onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleRefineClarifySubmit()}
+                        />
+                        <button className="refine-send" onClick={handleRefineClarifySubmit} disabled={!refineClarifyAnswer.trim()}>
+                          <Send size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="font-dm" style={{ fontSize: "11px", color: "#2A2A2A", marginTop: "10px" }}>
+                    Tell the AI what to add, remove, or change in the enhanced prompt.
+                  </div>
                 </div>
               </div>
             )}
@@ -721,12 +894,26 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.1.2</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.2.0</span>
                   <span className="tag tag-g">LATEST</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
               </div>
               <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Prompt Refiner</strong> — After getting your enhanced prompt, refine it with natural language. Add, remove, or tweak anything without starting over.</li>
+                <li><strong>Contradiction Detection</strong> — If your refinement conflicts with your original intent, the AI asks a clarifying question before making changes.</li>
+                <li><strong>Iterative Refinement Loop</strong> — Keep refining as many times as you want with version tracking (v2, v3, v4...).</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.1.2</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#888888", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
                 <li><strong>Simplified Export</strong> — Removed the Copy as Plaintext button for a cleaner, less cluttered export bar.</li>
               </ul>
             </div>
@@ -777,7 +964,7 @@ export default function App() {
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.1.2</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.2.0</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
