@@ -421,7 +421,7 @@ export default function App() {
         background: "rgba(10,10,10,0.85)", backdropFilter: "blur(12px)",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }} onClick={() => setView("home")}>
-          <img src="/logo.png" alt="PromptCraft Header Logo" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "contain" }} />
+          <img src="/image-removebg-preview.png" alt="PromptCraft Header Logo" style={{ width: 22, height: 22, objectFit: "contain" }} />
           <span className="font-sora" style={{ fontSize: "15px", fontWeight: 600, color: "#F5F5F5", letterSpacing: "-0.025em" }}>PromptCraft</span>
         </div>
         <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
