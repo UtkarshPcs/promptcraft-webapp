@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle } from "lucide-react";
+import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle } from "lucide-react";
 
 const SYSTEM_PROMPT = `# Prompt Enhancer Skill
 
@@ -159,6 +159,69 @@ When you need clarification about a contradiction:
 
 NEVER return anything outside of these two JSON structures.`;
 
+const MIXER_SYSTEM_PROMPT = `# Prompt Mixer
+
+You are an expert prompt blending engine. You receive TWO prompts and must intelligently merge them into a single, unified, superior prompt.
+
+## Your Process
+
+1. **Analyze Both Prompts**: Read Prompt A and Prompt B carefully.
+2. **Identify Shared Instructions**: Find instructions that appear in BOTH prompts (even if worded differently but semantically identical). Keep only ONE copy of each shared instruction.
+3. **Identify Unique Instructions**: Find instructions that exist in only ONE of the two prompts. Include ALL unique instructions in the merged result.
+4. **Detect Contradictions**: Find any instructions that DIRECTLY CONFLICT between the two prompts. Examples of contradictions:
+   - One says "write short" and the other says "write long"
+   - One says "formal tone" and the other says "casual tone"
+   - One says "use bullet points" and the other says "use paragraphs only"
+   - One says "avoid technical jargon" and the other says "use technical terminology"
+   - One assigns a different role/persona
+   - One specifies a different audience
+   - Conflicting output formats, lengths, styles, or constraints
+
+## Response Rules
+
+### If NO contradictions are found:
+Merge everything into a cohesive, well-structured prompt. Deduplicate shared instructions and combine all unique ones.
+
+Return ONLY this JSON:
+{"type":"blended","blendedPrompt":"The full merged prompt ready to use","mergeLog":["Kept shared: description of shared instruction","Merged unique from A: description","Merged unique from B: description"],"tags":["Blended","Merged"]}
+
+### If contradictions ARE found:
+Do NOT attempt to merge yet. Instead, surface each contradiction as a question for the user to resolve.
+
+Return ONLY this JSON:
+{"type":"contradictions","contradictions":[{"point":"Short name of the conflict","promptA":"What Prompt A says about this","promptB":"What Prompt B says about this","question":"A clear question asking the user which approach to take","options":["Option based on Prompt A","Option based on Prompt B","A reasonable middle-ground option"]}],"preview":"Brief summary of what the prompts share and what conflicts"}
+
+Each contradiction MUST have 2-3 options. Be specific about what each option means.
+
+## Quality Rules
+- The blended prompt should be BETTER than either input alone
+- Maintain logical flow and coherent structure
+- Don't just concatenate — truly merge and synthesize
+- Use the best phrasing from whichever prompt expressed an idea better
+- The final prompt should be self-contained and ready to use
+
+NEVER return anything outside of these two JSON structures. NEVER wrap in markdown code fences.`;
+
+const MIXER_RESOLVE_PROMPT = `# Prompt Mixer — Resolution Mode
+
+You previously analyzed two prompts and found contradictions. The user has now resolved each contradiction by choosing their preferred option.
+
+Your job: Merge the two prompts into ONE unified prompt, using the user's chosen resolutions for each conflict point.
+
+## Rules
+- Apply each resolution exactly as chosen
+- Deduplicate shared instructions (keep one copy)
+- Include all unique instructions from both prompts
+- Create a cohesive, well-structured final prompt
+- The result should be BETTER than either input alone
+
+## MANDATORY OUTPUT FORMAT
+
+Return ONLY this JSON:
+{"type":"blended","blendedPrompt":"The full merged prompt with resolutions applied","mergeLog":["Resolved: conflict name → chosen option","Kept shared: description","Merged unique: description"],"tags":["Blended","Resolved"]}
+
+NEVER return anything outside this JSON structure. NEVER wrap in markdown code fences.`;
+
 // API key is secured in the backend (api/enhance.js) via environment variables
 
 // Rough token estimate: ~4 chars per token (same heuristic most LLM UIs use)
@@ -201,7 +264,7 @@ async function callGroq(messages, sysPrompt = SYSTEM_PROMPT) {
 }
 
 export default function App() {
-  const [view, setView] = useState("home"); // "home" | "updates"
+  const [view, setView] = useState("home"); // "home" | "updates" | "mixer"
   const [input, setInput] = useState("");
   const [stage, setStage] = useState("idle");
   const [questions, setQuestions] = useState([]);
@@ -232,6 +295,18 @@ export default function App() {
   const [refineClarify, setRefineClarify] = useState(null); // { questions, preview }
   const [refineClarifyAnswer, setRefineClarifyAnswer] = useState("");
   const refineRef = useRef(null);
+
+  // Mixer state
+  const [mixerInputA, setMixerInputA] = useState("");
+  const [mixerInputB, setMixerInputB] = useState("");
+  const [mixerStage, setMixerStage] = useState("input"); // "input" | "loading" | "contradictions" | "result"
+  const [mixerContradictions, setMixerContradictions] = useState([]);
+  const [mixerResolutions, setMixerResolutions] = useState({});
+  const [mixerResult, setMixerResult] = useState(null);
+  const [mixerCopied, setMixerCopied] = useState(false);
+  const [mixerPreview, setMixerPreview] = useState("");
+  const mixerRefA = useRef(null);
+  const mixerRefB = useRef(null);
 
   useEffect(() => {
     if (textareaRef.current && view === "home") {
@@ -324,6 +399,72 @@ export default function App() {
     setRefineClarifyAnswer("");
     setRefineLoading(false);
     setHistory(h => [{ input, result: res }, ...h.slice(0, 9)]);
+  }
+
+  // --- Mixer Handlers ---
+  async function handleBlend() {
+    if (!mixerInputA.trim() || !mixerInputB.trim()) return;
+    setMixerStage("loading");
+    setMixerResult(null);
+    setMixerContradictions([]);
+    setMixerResolutions({});
+    setMixerPreview("");
+
+    const message = `## Prompt A\n\n${mixerInputA}\n\n## Prompt B\n\n${mixerInputB}`;
+    const res = await callGroq([{ role: "user", content: message }], MIXER_SYSTEM_PROMPT);
+
+    if (res.type === "contradictions") {
+      setMixerContradictions(res.contradictions || []);
+      setMixerPreview(res.preview || "");
+      setMixerResolutions({});
+      setMixerStage("contradictions");
+    } else {
+      setMixerResult(res);
+      setMixerStage("result");
+    }
+  }
+
+  async function handleResolveContradictions() {
+    const allResolved = mixerContradictions.every((_, i) => mixerResolutions[i] !== undefined);
+    if (!allResolved) return;
+
+    setMixerStage("loading");
+    const resolutionsText = mixerContradictions.map((c, i) => {
+      return `- ${c.point}: User chose → "${c.options[mixerResolutions[i]]}"`;
+    }).join("\n");
+
+    const message = `## Prompt A\n\n${mixerInputA}\n\n## Prompt B\n\n${mixerInputB}\n\n## User's Resolved Contradictions\n\n${resolutionsText}`;
+    const res = await callGroq([{ role: "user", content: message }], MIXER_RESOLVE_PROMPT);
+    setMixerResult(res);
+    setMixerStage("result");
+  }
+
+  function handleMixerCopy() {
+    navigator.clipboard.writeText(mixerResult?.blendedPrompt || "");
+    setMixerCopied(true);
+    setTimeout(() => setMixerCopied(false), 2000);
+  }
+
+  function handleMixerReset() {
+    setMixerInputA("");
+    setMixerInputB("");
+    setMixerStage("input");
+    setMixerContradictions([]);
+    setMixerResolutions({});
+    setMixerResult(null);
+    setMixerCopied(false);
+    setMixerPreview("");
+  }
+
+  function downloadMixerTxt() {
+    const text = mixerResult?.blendedPrompt || "";
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "promptcraft-blended.txt";
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   // --- Export Actions ---
@@ -510,6 +651,67 @@ export default function App() {
           margin-top: 12px; padding: 16px; background: rgba(77,255,180,0.03);
           border: 1px solid #1E3A2A; border-radius: 8px;
         }
+
+        /* Mixer Styles */
+        .mixer-grid {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+        }
+        @media (max-width: 640px) {
+          .mixer-grid { grid-template-columns: 1fr; }
+        }
+        .mixer-ta {
+          width: 100%; background: #0D0D0D; border: 1px solid #222;
+          color: #F5F5F5; font-family: 'DM Sans', sans-serif;
+          font-size: 14px; line-height: 1.7; resize: none; outline: none;
+          min-height: 200px; padding: 16px; border-radius: 8px;
+          transition: border-color 0.2s;
+        }
+        .mixer-ta:focus { border-color: #4DFFB4; }
+        .mixer-ta::placeholder { color: #282828; }
+
+        .mixer-center-icon {
+          display: flex; align-items: center; justify-content: center;
+          position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+          width: 36px; height: 36px; border-radius: 50%;
+          background: #0A0A0A; border: 1px solid #222;
+          z-index: 2;
+        }
+        @media (max-width: 640px) {
+          .mixer-center-icon { display: none; }
+        }
+
+        .contradiction-card {
+          background: #0D0D0D; border: 1px solid #1E1E1E; border-radius: 8px;
+          padding: 20px; margin-bottom: 12px;
+          transition: border-color 0.2s;
+        }
+        .contradiction-card:last-child { margin-bottom: 0; }
+
+        .resolution-option {
+          display: flex; align-items: center; gap: 10px;
+          padding: 10px 14px; border: 1px solid #1E1E1E; border-radius: 6px;
+          cursor: pointer; transition: all 0.2s; background: transparent;
+          width: 100%; text-align: left; color: #888;
+          font-family: 'DM Sans', sans-serif; font-size: 13px; line-height: 1.5;
+        }
+        .resolution-option:hover { border-color: #333; color: #CCCCCC; background: #111; }
+        .resolution-option.selected {
+          border-color: rgba(77,255,180,0.4); color: #F5F5F5;
+          background: rgba(77,255,180,0.04);
+        }
+
+        .blend-btn {
+          display: inline-flex; align-items: center; gap: 8px;
+          background: linear-gradient(135deg, #4DFFB4, #2AD0A0);
+          color: #0A0A0A; border: none;
+          padding: 14px 28px; font-family: 'DM Sans', sans-serif;
+          font-weight: 700; font-size: 15px; cursor: pointer;
+          border-radius: 8px; transition: transform 0.15s, box-shadow 0.2s;
+          white-space: nowrap;
+        }
+        .blend-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(77,255,180,0.15); }
+        .blend-btn:active { transform: translateY(0); }
+        .blend-btn:disabled { opacity: 0.3; cursor: not-allowed; transform: none; box-shadow: none; }
       `}</style>
 
       {/* Animated Hero Background */}
@@ -527,10 +729,13 @@ export default function App() {
           <span className="font-sora" style={{ fontSize: "15px", fontWeight: 600, color: "#F5F5F5", letterSpacing: "-0.025em" }}>PromptCraft</span>
         </div>
         <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
+          <button className={`btn-g font-mono${view === "mixer" ? "" : ""}`} style={{ fontSize: "11px", letterSpacing: "0.05em", color: view === "mixer" ? "#4DFFB4" : undefined }} onClick={() => { setView("mixer"); setMixerStage("input"); }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "5px" }}><Blend size={12} />MIXER</span>
+          </button>
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.2.0</span>
+            <span className="tag tag-g">v 1.3.0</span>
           </div>
         </div>
       </nav>
@@ -894,12 +1099,26 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.2.0</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.3.0</span>
                   <span className="tag tag-g">LATEST</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
               </div>
               <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Prompt Mixer</strong> — Paste two prompts and blend them into one. Shared instructions are deduplicated, unique ones are merged seamlessly.</li>
+                <li><strong>Contradiction Resolution</strong> — When two prompts conflict (e.g., "write short" vs "write long"), the Mixer surfaces each contradiction as interactive questions with options for you to choose.</li>
+                <li><strong>Merge Intelligence</strong> — The AI synthesizes the best phrasing from both inputs, creating a blended prompt that's better than either original.</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.2.0</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#888888", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
                 <li><strong>Prompt Refiner</strong> — After getting your enhanced prompt, refine it with natural language. Add, remove, or tweak anything without starting over.</li>
                 <li><strong>Contradiction Detection</strong> — If your refinement conflicts with your original intent, the AI asks a clarifying question before making changes.</li>
                 <li><strong>Iterative Refinement Loop</strong> — Keep refining as many times as you want with version tracking (v2, v3, v4...).</li>
@@ -961,10 +1180,282 @@ export default function App() {
           </div>
         )}
 
+        {/* ── MIXER VIEW ── */}
+        {view === "mixer" && (
+          <div className="fade-in" style={{ paddingTop: "60px" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginBottom: "20px", cursor: "pointer" }} onClick={() => setView("home")} className="btn-g">
+              <ArrowRight size={14} style={{ transform: "rotate(180deg)" }} />
+              <span className="font-dm" style={{ fontSize: "14px", fontWeight: 500 }}>Back to App</span>
+            </div>
+
+            <div style={{ marginBottom: "16px" }}>
+              <span className="font-mono" style={{ fontSize: "11px", color: "#4DFFB4", letterSpacing: "0.14em" }}>PROMPT MIXER</span>
+            </div>
+            <h2 className="font-sora" style={{ fontSize: "clamp(28px, 6vw, 42px)", fontWeight: 700, color: "#F5F5F5", marginBottom: "12px", letterSpacing: "-0.03em", lineHeight: 1.1 }}>
+              Blend two prompts<br />into one.
+            </h2>
+            <p className="font-dm" style={{ fontSize: "15px", color: "#555", lineHeight: 1.65, maxWidth: "420px", marginBottom: "36px" }}>
+              Paste two prompts below. We'll merge shared instructions, combine unique ones,
+              and help you resolve any contradictions.
+            </p>
+
+            {/* MIXER INPUT STAGE */}
+            {(mixerStage === "input" || mixerStage === "loading") && (
+              <div className="fade-in">
+                <div style={{ position: "relative" }}>
+                  <div className="mixer-grid">
+                    <div>
+                      <div className="font-mono" style={{ fontSize: "10px", color: "#4DFFB4", letterSpacing: "0.12em", marginBottom: "8px" }}>PROMPT A</div>
+                      <textarea
+                        className="mixer-ta"
+                        ref={mixerRefA}
+                        value={mixerInputA}
+                        onChange={e => setMixerInputA(e.target.value)}
+                        placeholder={"Paste your first prompt here..."}
+                        disabled={mixerStage === "loading"}
+                      />
+                      {mixerInputA.trim() && (
+                        <div className="font-mono" style={{ fontSize: "10px", color: "#333", marginTop: "6px" }}>
+                          {countTokens(mixerInputA).toLocaleString()} tok
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-mono" style={{ fontSize: "10px", color: "#4DFFB4", letterSpacing: "0.12em", marginBottom: "8px" }}>PROMPT B</div>
+                      <textarea
+                        className="mixer-ta"
+                        ref={mixerRefB}
+                        value={mixerInputB}
+                        onChange={e => setMixerInputB(e.target.value)}
+                        placeholder={"Paste your second prompt here..."}
+                        disabled={mixerStage === "loading"}
+                      />
+                      {mixerInputB.trim() && (
+                        <div className="font-mono" style={{ fontSize: "10px", color: "#333", marginTop: "6px" }}>
+                          {countTokens(mixerInputB).toLocaleString()} tok
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mixer-center-icon">
+                    <ArrowLeftRight size={14} color="#4DFFB4" />
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "center", marginTop: "28px" }}>
+                  <button className="blend-btn" onClick={handleBlend} disabled={mixerStage === "loading" || !mixerInputA.trim() || !mixerInputB.trim()}>
+                    {mixerStage === "loading"
+                      ? <span style={{ display: "flex", gap: "6px", alignItems: "center" }}><span className="dot" /><span className="dot" /><span className="dot" /><span className="font-dm">Analyzing prompts...</span></span>
+                      : <><Blend size={15} />Blend Prompts</>
+                    }
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* CONTRADICTIONS STAGE */}
+            {mixerStage === "contradictions" && (
+              <div className="fade-in">
+                <div className="card" style={{ padding: "28px", marginBottom: "20px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "20px" }}>
+                    <div style={{
+                      width: 34, height: 34, border: "1px solid #332E1E", borderRadius: "50%",
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                      background: "rgba(255,214,102,0.04)",
+                    }}>
+                      <AlertTriangle size={14} color="#FFD666" />
+                    </div>
+                    <div>
+                      <div className="font-sora" style={{ fontSize: "16px", fontWeight: 600, color: "#F5F5F5", letterSpacing: "-0.02em", marginBottom: "3px" }}>
+                        Contradictions Detected
+                      </div>
+                      <div className="font-dm" style={{ fontSize: "13px", color: "#555", lineHeight: 1.5 }}>
+                        Choose your preference for each conflict to continue blending.
+                      </div>
+                    </div>
+                  </div>
+
+                  {mixerPreview && (
+                    <div style={{ background: "#0A0A0A", border: "1px solid #1A1A1A", borderRadius: "6px", padding: "12px 16px", marginBottom: "20px" }}>
+                      <div className="font-mono" style={{ fontSize: "10px", color: "#4DFFB4", letterSpacing: "0.1em", marginBottom: "6px" }}>ANALYSIS</div>
+                      <p className="font-dm" style={{ fontSize: "13px", color: "#555", lineHeight: 1.6 }}>{mixerPreview}</p>
+                    </div>
+                  )}
+
+                  {mixerContradictions.map((c, idx) => (
+                    <div key={idx} className="contradiction-card">
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
+                        <span className="font-mono" style={{ fontSize: "10px", color: "#FFD666", letterSpacing: "0.08em" }}>
+                          {String(idx + 1).padStart(2, "0")}
+                        </span>
+                        <span className="font-sora" style={{ fontSize: "14px", fontWeight: 600, color: "#F5F5F5" }}>{c.point}</span>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "14px" }}>
+                        <div style={{ background: "#111", border: "1px solid #1A1A1A", borderRadius: "6px", padding: "10px 14px" }}>
+                          <div className="font-mono" style={{ fontSize: "9px", color: "#4DFFB4", letterSpacing: "0.1em", marginBottom: "4px" }}>PROMPT A</div>
+                          <p className="font-dm" style={{ fontSize: "12px", color: "#888", lineHeight: 1.5 }}>{c.promptA}</p>
+                        </div>
+                        <div style={{ background: "#111", border: "1px solid #1A1A1A", borderRadius: "6px", padding: "10px 14px" }}>
+                          <div className="font-mono" style={{ fontSize: "9px", color: "#4DFFB4", letterSpacing: "0.1em", marginBottom: "4px" }}>PROMPT B</div>
+                          <p className="font-dm" style={{ fontSize: "12px", color: "#888", lineHeight: 1.5 }}>{c.promptB}</p>
+                        </div>
+                      </div>
+
+                      <div className="font-dm" style={{ fontSize: "13px", color: "#CCCCCC", marginBottom: "10px", lineHeight: 1.5 }}>
+                        {c.question}
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        {c.options?.map((opt, optIdx) => (
+                          <button
+                            key={optIdx}
+                            className={`resolution-option${mixerResolutions[idx] === optIdx ? " selected" : ""}`}
+                            onClick={() => setMixerResolutions(r => ({ ...r, [idx]: optIdx }))}
+                          >
+                            {mixerResolutions[idx] === optIdx
+                              ? <CheckCircle2 size={14} color="#4DFFB4" style={{ flexShrink: 0 }} />
+                              : <Circle size={14} color="#333" style={{ flexShrink: 0 }} />
+                            }
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "24px" }}>
+                    <button className="btn-g" onClick={handleMixerReset}><RotateCcw size={12} />Start over</button>
+                    <button
+                      className="blend-btn"
+                      onClick={handleResolveContradictions}
+                      disabled={!mixerContradictions.every((_, i) => mixerResolutions[i] !== undefined)}
+                      style={{ padding: "12px 24px", fontSize: "14px" }}
+                    >
+                      <Blend size={14} />Blend with Resolutions
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* MIXER RESULT STAGE */}
+            {mixerStage === "result" && mixerResult && (
+              <div className="fade-in">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                  <button className="btn-g" onClick={handleMixerReset}><RotateCcw size={12} />New blend</button>
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {mixerResult.tags?.map((t, i) => <span key={i} className="tag">{t}</span>)}
+                  </div>
+                </div>
+
+                {/* Blended prompt */}
+                <div className="card" style={{ padding: "28px", marginBottom: "14px" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", marginBottom: "20px" }}>
+                    <div>
+                      <div className="font-mono" style={{ fontSize: "10px", color: "#4DFFB4", letterSpacing: "0.12em", marginBottom: "5px" }}>BLENDED PROMPT</div>
+                      <div className="font-sora" style={{ fontSize: "18px", fontWeight: 600, color: "#F5F5F5", letterSpacing: "-0.025em" }}>Ready to use</div>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button className="btn-s" onClick={downloadMixerTxt} title="Download .txt" style={{ padding: "0 14px" }}>
+                        <Download size={14} />
+                      </button>
+                      <button className="btn-p" onClick={handleMixerCopy} style={{ minWidth: "96px" }}>
+                        {mixerCopied ? <><Check size={13} />Copied!</> : <><Copy size={13} />Copy</>}
+                      </button>
+                    </div>
+                  </div>
+
+                  <hr className="divider" style={{ marginBottom: "20px" }} />
+
+                  <p className="font-dm" style={{ fontSize: "15px", lineHeight: 1.8, color: "#CCCCCC", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {mixerResult.blendedPrompt}
+                  </p>
+
+                  <hr className="divider" style={{ marginTop: "20px", marginBottom: "12px" }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: "18px" }}>
+                    <span className="font-mono" style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "10px", color: "#3A3A3A" }}>
+                      <span style={{ color: "#555" }}>A</span>
+                      <span style={{ color: "#888", fontWeight: 600 }}>{countTokens(mixerInputA).toLocaleString()}</span>
+                      <span style={{ color: "#333" }}>tok</span>
+                    </span>
+                    <span style={{ color: "#222", fontSize: "10px" }}>+</span>
+                    <span className="font-mono" style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "10px", color: "#3A3A3A" }}>
+                      <span style={{ color: "#555" }}>B</span>
+                      <span style={{ color: "#888", fontWeight: 600 }}>{countTokens(mixerInputB).toLocaleString()}</span>
+                      <span style={{ color: "#333" }}>tok</span>
+                    </span>
+                    <span style={{ color: "#222", fontSize: "10px" }}>→</span>
+                    <span className="font-mono" style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "10px", color: "#3A3A3A" }}>
+                      <span style={{ color: "#4DFFB4", opacity: 0.8 }}>OUT</span>
+                      <span style={{ color: "#4DFFB4", fontWeight: 600 }}>{countTokens(mixerResult.blendedPrompt).toLocaleString()}</span>
+                      <span style={{ color: "#333" }}>tok</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Merge Log */}
+                {mixerResult.mergeLog?.length > 0 && (
+                  <div className="card" style={{ padding: "20px 24px", marginBottom: "14px" }}>
+                    <div className="font-mono" style={{ fontSize: "10px", color: "#2A2A2A", letterSpacing: "0.12em", marginBottom: "14px" }}>
+                      MERGE LOG
+                    </div>
+                    {mixerResult.mergeLog.map((log, i) => (
+                      <div key={i} className="imp-row">
+                        <div style={{
+                          width: 20, height: 20, border: "1px solid #1E1E1E", borderRadius: "50%",
+                          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: "2px",
+                        }}>
+                          <span className="font-mono" style={{ fontSize: "9px", color: "#4DFFB4" }}>{i + 1}</span>
+                        </div>
+                        <p className="font-dm" style={{ fontSize: "13px", color: "#555", lineHeight: 1.65 }}>{log}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Original Inputs */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                  <div style={{ padding: "14px 18px", border: "1px solid #161616", borderRadius: "6px" }}>
+                    <div className="font-mono" style={{ fontSize: "10px", color: "#252525", letterSpacing: "0.1em", marginBottom: "6px" }}>ORIGINAL PROMPT A</div>
+                    <p className="font-dm" style={{ fontSize: "12px", color: "#3A3A3A", lineHeight: 1.5, fontStyle: "italic", maxHeight: "100px", overflow: "hidden", textOverflow: "ellipsis" }}>{mixerInputA}</p>
+                  </div>
+                  <div style={{ padding: "14px 18px", border: "1px solid #161616", borderRadius: "6px" }}>
+                    <div className="font-mono" style={{ fontSize: "10px", color: "#252525", letterSpacing: "0.1em", marginBottom: "6px" }}>ORIGINAL PROMPT B</div>
+                    <p className="font-dm" style={{ fontSize: "12px", color: "#3A3A3A", lineHeight: 1.5, fontStyle: "italic", maxHeight: "100px", overflow: "hidden", textOverflow: "ellipsis" }}>{mixerInputB}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* LOADING SKELETON for Mixer */}
+            {mixerStage === "loading" && (
+              <div className="fade-in s1" style={{ marginTop: "14px" }}>
+                <div className="card skeleton-pulse" style={{ padding: "28px", display: "flex", flexDirection: "column", gap: "20px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div>
+                      <div className="skeleton-block" style={{ width: "100px", height: "10px", marginBottom: "8px" }} />
+                      <div className="skeleton-block" style={{ width: "140px", height: "18px" }} />
+                    </div>
+                    <div className="skeleton-block" style={{ width: "90px", height: "36px", borderRadius: "6px" }} />
+                  </div>
+                  <hr className="divider" />
+                  <div>
+                    <div className="skeleton-block" style={{ width: "100%", height: "14px", marginBottom: "12px" }} />
+                    <div className="skeleton-block" style={{ width: "90%", height: "14px", marginBottom: "12px" }} />
+                    <div className="skeleton-block" style={{ width: "95%", height: "14px", marginBottom: "12px" }} />
+                    <div className="skeleton-block" style={{ width: "60%", height: "14px" }} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.2.0</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.3.0</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
