@@ -24,7 +24,17 @@ A 10x prompt fixes all of this systematically.
 
 Before enhancing, ask the user up to 3 quick questions if the prompt is too sparse. Do NOT ask more than 3. Ask them all at once.
 
-Key things to uncover:
+### CRITICAL: Domain-Aware Question Selection
+First, classify the input into its domain, then tailor questions to that domain. NEVER default to generic questions like "Who is the audience?" when domain-specific questions would be far more useful.
+
+- **Technical/coding prompts** → Ask about: programming language, framework, error context, desired output format (code, explanation, review), environment
+- **Data/analytics prompts** → Ask about: dataset type, analysis goal, tools/libraries, output format (chart, report, code)
+- **Creative/design prompts** → Ask about: style references, brand constraints, colors/motifs to avoid, medium (digital, print)
+- **Business/professional prompts** → Ask about: industry, company stage, specific KPIs, competitive context
+- **Writing/content prompts** → Ask about: tone, length, publication platform, key message
+- **General/vague prompts** → Then fall back to: goal, audience, format, constraints
+
+Key things to uncover (use only when domain-specific questions don't apply):
 1. Goal - What outcome do they actually want?
 2. Audience - Who will read/use the output?
 3. Format - How should the output be structured?
@@ -177,6 +187,20 @@ You are an expert prompt blending engine. You receive TWO prompts and must intel
    - One specifies a different audience
    - Conflicting output formats, lengths, styles, or constraints
 
+## Deep Conflict Analysis (CRITICAL)
+When analyzing contradictions, decompose each conflict into ALL its separable dimensions. Do NOT surface only one vague conflict when the prompts actually differ on multiple fronts. For example, if Prompt A assigns a "Therapist" role and Prompt B assigns a "Life Coach" role, these roles differ on MANY dimensions:
+- Methodology (therapeutic techniques vs action-oriented coaching)
+- Communication style (reflective listening vs directive guidance)
+- Advice-giving philosophy (exploratory vs prescriptive)
+- Accountability approach (empathetic processing vs goal-driven tracking)
+Surface EACH dimension as a separate contradiction with its own options. The number of contradictions must scale with the actual complexity of the conflict — simple tone conflicts may be 1 item, but deep role/philosophy conflicts should be 3-5+ items.
+
+## Single-Word Prompt Handling
+If one prompt is very short (1-3 words) like "Sell", "Simplify", "Fix", "Summarize", treat it as a STRONG INTENT MODIFIER. Do not just absorb it gently — amplify that intent aggressively throughout the entire blended output. A single word like "Sell" means the entire output should be reoriented toward persuasion. "Simplify" means strip complexity everywhere.
+
+## Multilingual Detection
+If the two prompts are in DIFFERENT languages, acknowledge this in your response. In the blended output, default to the language of the longer/more detailed prompt, but mention in the mergeLog that multiple languages were detected and which language was chosen for the output.
+
 ## Response Rules
 
 ### If NO contradictions are found:
@@ -186,7 +210,7 @@ Return ONLY this JSON:
 {"type":"blended","blendedPrompt":"The full merged prompt ready to use","mergeLog":["Kept shared: description of shared instruction","Merged unique from A: description","Merged unique from B: description"],"tags":["Blended","Merged"]}
 
 ### If contradictions ARE found:
-Do NOT attempt to merge yet. Instead, surface each contradiction as a question for the user to resolve.
+Do NOT attempt to merge yet. Instead, surface EVERY contradiction as a question for the user to resolve. Be thorough — surface ALL dimensions of conflict, not just the obvious ones.
 
 Return ONLY this JSON:
 {"type":"contradictions","contradictions":[{"point":"Short name of the conflict","promptA":"What Prompt A says about this","promptB":"What Prompt B says about this","question":"A clear question asking the user which approach to take","options":["Option based on Prompt A","Option based on Prompt B","A reasonable middle-ground option"]}],"preview":"Brief summary of what the prompts share and what conflicts"}
@@ -342,14 +366,38 @@ export default function App() {
   }
 
   async function handleAnswers() {
+    const allSkipped = questions.every((_, i) => !answers[i]?.trim());
     const answersText = questions.map((q, i) => `${q} → ${answers[i] || "(skipped)"}`).join("\n");
-    const combined = `${input}\n\nAdditional context:\n${answersText}`;
+    const combined = allSkipped ? input : `${input}\n\nAdditional context:\n${answersText}`;
     setStage("loading");
     setOutputTokens(0);
-    const res = await callGroq([{ role: "user", content: combined }]);
+
+    // If all answers were skipped, use a force-enhance system prompt that won't ask questions
+    const sysPrompt = allSkipped
+      ? SYSTEM_PROMPT + `\n\n## OVERRIDE: FORCE ENHANCEMENT MODE\nThe user chose to skip all clarifying questions. You MUST NOT return questions. Instead, enhance the prompt immediately using your best judgment to fill in missing context. Make reasonable assumptions for audience, format, tone, and constraints. Generate the best possible enhanced prompt from what you have. Return ONLY the enhanced JSON format — NEVER the questions format.`
+      : SYSTEM_PROMPT;
+
+    let res = await callGroq([{ role: "user", content: combined }], sysPrompt);
+
+    // Safety net: if AI still returns questions despite force mode, retry once more with raw input only
+    if (res.type === "questions" || !res.enhancedPrompt) {
+      const forceMsg = `Enhance this prompt with a clear expert persona, specific step-by-step instructions, format, constraints, and any implied context. Make reasonable assumptions. Do NOT ask any questions — just enhance it:\n\n${input}`;
+      res = await callGroq([{ role: "user", content: forceMsg }], sysPrompt);
+    }
+
+    // Final fallback: if still no enhancedPrompt, construct a minimal valid result
+    if (!res.enhancedPrompt) {
+      res = {
+        type: "enhanced",
+        enhancedPrompt: res.enhancedPrompt || input,
+        improvements: res.improvements || ["Unable to enhance — showing original input"],
+        tags: res.tags || ["Fallback"]
+      };
+    }
+
     setResult(res);
     setOutputTokens(countTokens(res.enhancedPrompt));
-    setHistory(h => [{ input, result: res }, ...h.slice(0, 9)]); // Keep last 10
+    setHistory(h => [{ input, result: res }, ...h.slice(0, 9)]);
     setStage("result");
   }
 
@@ -735,7 +783,7 @@ export default function App() {
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.3.0</span>
+            <span className="tag tag-g">v 1.3.1</span>
           </div>
         </div>
       </nav>
@@ -1099,12 +1147,27 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.3.0</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.3.1</span>
                   <span className="tag tag-g">LATEST</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
               </div>
               <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Skip All Fix</strong> — Fixed critical bug where skipping all clarifying questions produced an empty output. Now generates a best-effort enhanced prompt immediately.</li>
+                <li><strong>Smarter Questions</strong> — Clarifying questions are now domain-aware. Technical prompts ask about stack/tools, creative prompts ask about style constraints — no more generic "Who is the audience?"</li>
+                <li><strong>Deeper Conflict Analysis</strong> — The Mixer now decomposes complex role conflicts into all separable dimensions instead of surfacing just one shallow contradiction.</li>
+                <li><strong>Multilingual Detection</strong> — Mixer now detects when prompts are in different languages and notes the language choice in the merge log.</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.3.0</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#888888", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
                 <li><strong>Prompt Mixer</strong> — Paste two prompts and blend them into one. Shared instructions are deduplicated, unique ones are merged seamlessly.</li>
                 <li><strong>Contradiction Resolution</strong> — When two prompts conflict (e.g., "write short" vs "write long"), the Mixer surfaces each contradiction as interactive questions with options for you to choose.</li>
                 <li><strong>Merge Intelligence</strong> — The AI synthesizes the best phrasing from both inputs, creating a blended prompt that's better than either original.</li>
@@ -1455,7 +1518,7 @@ export default function App() {
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.3.0</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.3.1</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
