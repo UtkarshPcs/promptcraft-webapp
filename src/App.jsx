@@ -408,8 +408,6 @@ export default function App() {
 
         .q-block { padding: 16px 0; border-bottom: 1px solid #181818; }
         .q-block:last-child { border-bottom: none; }
-
-        .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: #4DFFB4; display: inline-block; }
       `}</style>
 
       {/* Animated Hero Background */}
@@ -423,14 +421,14 @@ export default function App() {
         background: "rgba(10,10,10,0.85)", backdropFilter: "blur(12px)",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }} onClick={() => setView("home")}>
-          <span className="nav-dot" />
+          <img src="/logo.png" alt="PromptCraft Header Logo" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "contain" }} />
           <span className="font-sora" style={{ fontSize: "15px", fontWeight: 600, color: "#F5F5F5", letterSpacing: "-0.025em" }}>PromptCraft</span>
         </div>
         <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.1.0</span>
+            <span className="tag tag-g">v 1.1.1</span>
           </div>
         </div>
       </nav>
@@ -735,8 +733,20 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.1.0</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.1.1</span>
                   <span className="tag tag-g">LATEST</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Brand Identity</strong> — Added the official PromptCraft logo to navigation and application files.</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.1.0</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 04, 2026</span>
               </div>
@@ -767,7 +777,7 @@ export default function App() {
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.1.0</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.1.1</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
