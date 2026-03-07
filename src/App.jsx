@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle } from "lucide-react";
+import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle, Settings, AlertCircle } from "lucide-react";
 
 const SYSTEM_PROMPT = `# Prompt Enhancer Skill
 
@@ -254,22 +254,50 @@ function countTokens(text) {
   return Math.ceil(text.length / 4);
 }
 
-async function callGroq(messages, sysPrompt = SYSTEM_PROMPT) {
+async function callGroq(messages, sysPrompt = SYSTEM_PROMPT, apiKey = null, userContext = "") {
   try {
-    const response = await fetch("/api/enhance", {
+    let finalSysPrompt = sysPrompt;
+    if (userContext.trim()) {
+      finalSysPrompt += `\n\n## User Context (Apply these instructions strictly):\n${userContext.trim()}`;
+    }
+
+    if (!apiKey) {
+      return { type: "enhanced", enhancedPrompt: "⚠️ Missing API Key. Please add your Groq API key in Settings.", improvements: [], tags: ["Error"] };
+    }
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        messages,
-        systemPrompt: sysPrompt,
+        model: "qwen-2.5-32b",
+        max_tokens: 1500,
+        temperature: 0.6,
+        top_p: 0.95,
+        messages: [
+          { role: "system", content: finalSysPrompt },
+          ...messages,
+        ],
       }),
     });
+
     const data = await response.json();
     if (!response.ok || data.error) {
       const errMsg = data.error?.message || data.error || response.statusText || "Unknown API error";
-      return { type: "enhanced", enhancedPrompt: `⚠️ API Error: ${errMsg}`, improvements: ["Check your GROQ_API_KEY environment variable in Vercel"], tags: ["Error"] };
+
+      // Specifically catch 401 Unauthorized for invalid keys
+      if (response.status === 401 || errMsg.toLowerCase().includes('invalid api key')) {
+        return {
+          type: "invalid_key",
+          enhancedPrompt: `⚠️ Invalid API Key. Please check your settings.`,
+          improvements: [],
+          tags: ["Error"]
+        };
+      }
+
+      return { type: "enhanced", enhancedPrompt: `⚠️ API Error: ${errMsg}`, improvements: ["Check your API settings"], tags: ["Error"] };
     }
     // Qwen3 may prefix a <think>...</think> block before JSON — strip it.
     const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
@@ -288,7 +316,7 @@ async function callGroq(messages, sysPrompt = SYSTEM_PROMPT) {
 }
 
 export default function App() {
-  const [view, setView] = useState("home"); // "home" | "updates" | "mixer"
+  const [view, setView] = useState("home"); // "home" | "updates" | "mixer" | "settings"
   const [input, setInput] = useState("");
   const [stage, setStage] = useState("idle");
   const [questions, setQuestions] = useState([]);
@@ -332,6 +360,26 @@ export default function App() {
   const mixerRefA = useRef(null);
   const mixerRefB = useRef(null);
 
+  // Settings state
+  const [apiKey, setApiKey] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("promptcraft_api_key") || "";
+    }
+    return "";
+  });
+  const [customInstructions, setCustomInstructions] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("promptcraft_custom_instructions") || "";
+    }
+    return "";
+  });
+  const [showApiKeyAlert, setShowApiKeyAlert] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState(apiKey);
+  const [tempInstructions, setTempInstructions] = useState(customInstructions);
+
   useEffect(() => {
     if (textareaRef.current && view === "home") {
       textareaRef.current.style.height = "auto";
@@ -347,11 +395,28 @@ export default function App() {
 
   async function handleEnhance() {
     if (!input.trim()) return;
+
+    if (!apiKey) {
+      setShowApiKeyAlert(true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    setShowApiKeyAlert(false);
+    setApiKeyError("");
+
     setStage("loading");
     setResult(null);
     setQuestions([]);
     setOutputTokens(0);
-    const res = await callGroq([{ role: "user", content: input }]);
+    const res = await callGroq([{ role: "user", content: input }], SYSTEM_PROMPT, apiKey, customInstructions);
+
+    if (res.type === "invalid_key") {
+      setApiKeyError("The API key provided is invalid. Please check your Settings.");
+      setResult(res);
+      setStage("result");
+      return;
+    }
+
     if (res.type === "questions") {
       setQuestions(res.questions);
       setPreview(res.preview || "");
@@ -366,6 +431,8 @@ export default function App() {
   }
 
   async function handleAnswers() {
+    if (!apiKey) return;
+
     const allSkipped = questions.every((_, i) => !answers[i]?.trim());
     const answersText = questions.map((q, i) => `${q} → ${answers[i] || "(skipped)"}`).join("\n");
     const combined = allSkipped ? input : `${input}\n\nAdditional context:\n${answersText}`;
@@ -377,21 +444,28 @@ export default function App() {
       ? SYSTEM_PROMPT + `\n\n## OVERRIDE: FORCE ENHANCEMENT MODE\nThe user chose to skip all clarifying questions. You MUST NOT return questions. Instead, enhance the prompt immediately using your best judgment to fill in missing context. Make reasonable assumptions for audience, format, tone, and constraints. Generate the best possible enhanced prompt from what you have. Return ONLY the enhanced JSON format — NEVER the questions format.`
       : SYSTEM_PROMPT;
 
-    let res = await callGroq([{ role: "user", content: combined }], sysPrompt);
+    let res = await callGroq([{ role: "user", content: combined }], sysPrompt, apiKey, customInstructions);
+
+    if (res.type === "invalid_key") {
+      setApiKeyError("The API key provided is invalid. Please check your Settings.");
+      setResult(res);
+      setStage("result");
+      return;
+    }
 
     // Safety net: if AI still returns questions despite force mode, retry once more with raw input only
     if (res.type === "questions" || !res.enhancedPrompt) {
       const forceMsg = `Enhance this prompt with a clear expert persona, specific step-by-step instructions, format, constraints, and any implied context. Make reasonable assumptions. Do NOT ask any questions — just enhance it:\n\n${input}`;
-      res = await callGroq([{ role: "user", content: forceMsg }], sysPrompt);
+      res = await callGroq([{ role: "user", content: forceMsg }], sysPrompt, apiKey, customInstructions);
     }
 
     // Final fallback: if still no enhancedPrompt, construct a minimal valid result
-    if (!res.enhancedPrompt) {
+    if (!res?.enhancedPrompt && res?.type !== "invalid_key") {
       res = {
         type: "enhanced",
-        enhancedPrompt: res.enhancedPrompt || input,
-        improvements: res.improvements || ["Unable to enhance — showing original input"],
-        tags: res.tags || ["Fallback"]
+        enhancedPrompt: res?.enhancedPrompt || input,
+        improvements: res?.improvements || ["Unable to enhance — showing original input"],
+        tags: res?.tags || ["Fallback"]
       };
     }
 
@@ -416,11 +490,11 @@ export default function App() {
 
   // --- Refine Handler ---
   async function handleRefine() {
-    if (!refineInput.trim() || !result?.enhancedPrompt) return;
+    if (!refineInput.trim() || !result?.enhancedPrompt || !apiKey) return;
     setRefineLoading(true);
     setRefineClarify(null);
     const refineMessage = `## Current Enhanced Prompt\n\n${result.enhancedPrompt}\n\n## User's Modification Request\n\n${refineInput}`;
-    const res = await callGroq([{ role: "user", content: refineMessage }], REFINE_SYSTEM_PROMPT);
+    const res = await callGroq([{ role: "user", content: refineMessage }], REFINE_SYSTEM_PROMPT, apiKey, customInstructions);
     if (res.type === "questions") {
       setRefineClarify({ questions: res.questions, preview: res.preview });
       setRefineLoading(false);
@@ -435,10 +509,10 @@ export default function App() {
   }
 
   async function handleRefineClarifySubmit() {
-    if (!refineClarifyAnswer.trim()) return;
+    if (!refineClarifyAnswer.trim() || !apiKey) return;
     setRefineLoading(true);
     const refineMessage = `## Current Enhanced Prompt\n\n${result.enhancedPrompt}\n\n## User's Original Modification Request\n\n${refineInput}\n\n## User's Clarification\n\n${refineClarifyAnswer}`;
-    const res = await callGroq([{ role: "user", content: refineMessage }], REFINE_SYSTEM_PROMPT);
+    const res = await callGroq([{ role: "user", content: refineMessage }], REFINE_SYSTEM_PROMPT, apiKey, customInstructions);
     setResult(res);
     setOutputTokens(countTokens(res.enhancedPrompt));
     setRefineCount(c => c + 1);
@@ -452,6 +526,15 @@ export default function App() {
   // --- Mixer Handlers ---
   async function handleBlend() {
     if (!mixerInputA.trim() || !mixerInputB.trim()) return;
+
+    if (!apiKey) {
+      setShowApiKeyAlert(true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    setShowApiKeyAlert(false);
+    setApiKeyError("");
+
     setMixerStage("loading");
     setMixerResult(null);
     setMixerContradictions([]);
@@ -459,7 +542,7 @@ export default function App() {
     setMixerPreview("");
 
     const message = `## Prompt A\n\n${mixerInputA}\n\n## Prompt B\n\n${mixerInputB}`;
-    const res = await callGroq([{ role: "user", content: message }], MIXER_SYSTEM_PROMPT);
+    const res = await callGroq([{ role: "user", content: message }], MIXER_SYSTEM_PROMPT, apiKey, customInstructions);
 
     if (res.type === "contradictions") {
       setMixerContradictions(res.contradictions || []);
@@ -473,6 +556,7 @@ export default function App() {
   }
 
   async function handleResolveContradictions() {
+    if (!apiKey) return;
     const allResolved = mixerContradictions.every((_, i) => mixerResolutions[i] !== undefined);
     if (!allResolved) return;
 
@@ -482,7 +566,7 @@ export default function App() {
     }).join("\n");
 
     const message = `## Prompt A\n\n${mixerInputA}\n\n## Prompt B\n\n${mixerInputB}\n\n## User's Resolved Contradictions\n\n${resolutionsText}`;
-    const res = await callGroq([{ role: "user", content: message }], MIXER_RESOLVE_PROMPT);
+    const res = await callGroq([{ role: "user", content: message }], MIXER_RESOLVE_PROMPT, apiKey, customInstructions);
     setMixerResult(res);
     setMixerStage("result");
   }
@@ -780,15 +864,49 @@ export default function App() {
           <button className={`btn-g font-mono${view === "mixer" ? "" : ""}`} style={{ fontSize: "11px", letterSpacing: "0.05em", color: view === "mixer" ? "#4DFFB4" : undefined }} onClick={() => { setView("mixer"); setMixerStage("input"); }}>
             <span style={{ display: "flex", alignItems: "center", gap: "5px" }}><Blend size={12} />MIXER</span>
           </button>
+          <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em", color: view === "settings" ? "#4DFFB4" : undefined }} onClick={() => setView("settings")}>
+            <span style={{ display: "flex", alignItems: "center", gap: "5px" }}><Settings size={12} />SETTINGS</span>
+          </button>
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.3.1</span>
+            <span className="tag tag-g">v 1.3.2</span>
           </div>
         </div>
       </nav>
 
       <main style={{ maxWidth: "660px", margin: "0 auto", padding: "0 24px 100px" }}>
+
+        {/* ── API KEY ALERTS ── */}
+        {showApiKeyAlert && (
+          <div style={{ backgroundColor: "rgba(255, 171, 0, 0.1)", border: "1px solid rgba(255, 171, 0, 0.3)", padding: "16px", borderRadius: "12px", marginBottom: "24px", marginTop: "24px", display: "flex", alignItems: "flex-start", gap: "12px" }}>
+            <AlertCircle size={20} color="#FFAB00" style={{ flexShrink: 0, marginTop: "2px" }} />
+            <div style={{ flex: 1 }}>
+              <h4 className="font-sora" style={{ color: "#FFAB00", fontSize: "15px", fontWeight: 600, marginBottom: "4px" }}>API Key Required</h4>
+              <p className="font-dm" style={{ color: "rgba(255, 255, 255, 0.7)", fontSize: "14px", lineHeight: 1.5 }}>
+                You need a Groq API key to use PromptCraft. Your key is stored locally in your browser and never sent to our servers.
+              </p>
+            </div>
+            <button onClick={() => setView("settings")} style={{ background: "#FFAB00", color: "#000", border: "none", padding: "8px 16px", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer", alignSelf: "center", whiteSpace: "nowrap" }}>
+              Go to Settings
+            </button>
+          </div>
+        )}
+
+        {apiKeyError && (
+          <div style={{ backgroundColor: "rgba(255, 86, 86, 0.1)", border: "1px solid rgba(255, 86, 86, 0.3)", padding: "16px", borderRadius: "12px", marginBottom: "24px", marginTop: "24px", display: "flex", alignItems: "flex-start", gap: "12px" }}>
+            <AlertCircle size={20} color="#FF5656" style={{ flexShrink: 0, marginTop: "2px" }} />
+            <div style={{ flex: 1 }}>
+              <h4 className="font-sora" style={{ color: "#FF5656", fontSize: "15px", fontWeight: 600, marginBottom: "4px" }}>API Key Error</h4>
+              <p className="font-dm" style={{ color: "rgba(255, 255, 255, 0.7)", fontSize: "14px", lineHeight: 1.5 }}>
+                {apiKeyError}
+              </p>
+            </div>
+            <button onClick={() => setView("settings")} style={{ background: "#FF5656", color: "#000", border: "none", padding: "8px 16px", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer", alignSelf: "center", whiteSpace: "nowrap" }}>
+              Check API Key
+            </button>
+          </div>
+        )}
 
         {/* ── HOME VIEW ── */}
         {view === "home" && (
@@ -1133,6 +1251,140 @@ export default function App() {
         )}
 
         {/* ── UPDATES CHANGELOG VIEW ── */}
+        {/* ── SETTINGS VIEW ── */}
+        {view === "settings" && (
+          <div style={{ maxWidth: "800px", margin: "0 auto", padding: "60px 0 20px" }}>
+            <div style={{ marginBottom: "40px" }}>
+              <h2 className="font-sora" style={{ fontSize: "32px", fontWeight: 600, color: "#F5F5F5", marginBottom: "12px", letterSpacing: "-0.02em" }}>
+                Settings
+              </h2>
+              <p className="font-dm" style={{ fontSize: "15px", color: "#888888", lineHeight: 1.6 }}>
+                Configure your API keys and default AI instructions.
+              </p>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "32px" }}>
+
+              {/* API Key Section */}
+              <div className="card" style={{ padding: "32px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                  <div style={{ width: "32px", height: "32px", borderRadius: "8px", background: "rgba(255, 255, 255, 0.05)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <AlertCircle size={16} color="#888" />
+                  </div>
+                  <h3 className="font-sora" style={{ fontSize: "18px", color: "#F5F5F5", fontWeight: 600 }}>Groq API Key</h3>
+                </div>
+                <p className="font-dm" style={{ fontSize: "14px", color: "#888", marginBottom: "24px", lineHeight: 1.6 }}>
+                  To use PromptCraft, you run calls directly from your browser to Groq.
+                  Your key is stored securely in your browser's Local Storage and is never sent to our servers.
+                  Get a free key at <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: "#4DFFB4", textDecoration: "none" }}>console.groq.com</a>.
+                </p>
+
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  <div style={{ position: "relative", flex: 1 }}>
+                    <input
+                      type={showKey ? "text" : "password"}
+                      value={tempApiKey}
+                      onChange={(e) => setTempApiKey(e.target.value)}
+                      placeholder="gsk_..."
+                      className="font-mono text-in"
+                      style={{ paddingRight: "48px" }}
+                    />
+                    <button
+                      onClick={() => setShowKey(!showKey)}
+                      style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: "12px" }}
+                      title={showKey ? "Hide Key" : "Show Key"}
+                    >
+                      {showKey ? "HIDE" : "SHOW"}
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (tempApiKey.trim()) {
+                        localStorage.setItem("promptcraft_api_key", tempApiKey.trim());
+                        setApiKey(tempApiKey.trim());
+                        setSettingsSaved(true);
+                        setTimeout(() => setSettingsSaved(false), 2000);
+                      }
+                    }}
+                    className="btn-p"
+                    style={{ background: "#F5F5F5", color: "#000", fontWeight: 600, padding: "0 24px", minWidth: "100px", height: "48px", display: "flex", alignItems: "center", justifyContent: "center" }}
+                  >
+                    {settingsSaved ? <Check size={18} color="#000" /> : "Save"}
+                  </button>
+                </div>
+                {apiKey && (
+                  <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
+                    <button
+                      onClick={() => {
+                        if (confirm("Are you sure you want to clear your API key?")) {
+                          localStorage.removeItem("promptcraft_api_key");
+                          setApiKey("");
+                          setTempApiKey("");
+                        }
+                      }}
+                      style={{ background: "none", border: "none", color: "#FF5656", fontSize: "13px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}
+                    >
+                      <Circle size={12} /> Clear stored key
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Custom Instructions Section */}
+              <div className="card" style={{ padding: "32px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                  <div style={{ width: "32px", height: "32px", borderRadius: "8px", background: "rgba(255, 255, 255, 0.05)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <FileText size={16} color="#888" />
+                  </div>
+                  <h3 className="font-sora" style={{ fontSize: "18px", color: "#F5F5F5", fontWeight: 600 }}>Global AI Instructions</h3>
+                </div>
+                <p className="font-dm" style={{ fontSize: "14px", color: "#888", marginBottom: "24px", lineHeight: 1.6 }}>
+                  Set custom instructions that will be injected into every prompt enhancement.
+                  Use this to enforce a specific writing style, target audience context, or project constraints across all your prompts.
+                </p>
+
+                <div className="input-wrap" style={{ marginBottom: "16px" }}>
+                  <textarea
+                    value={tempInstructions}
+                    onChange={(e) => setTempInstructions(e.target.value)}
+                    placeholder="e.g., Always use B2B SaaS terminology. Avoid emojis. Optimize for senior engineering audiences."
+                    className="font-dm text-in"
+                    style={{ minHeight: "150px", resize: "vertical" }}
+                  />
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#555", marginTop: "8px", padding: "0 4px" }}>
+                    <span className="font-mono">{tempInstructions.length} chars</span>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+                  {customInstructions && tempInstructions !== customInstructions && (
+                    <button
+                      className="btn-g"
+                      onClick={() => setTempInstructions(customInstructions)}
+                    >
+                      Discard Changes
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      localStorage.setItem("promptcraft_custom_instructions", tempInstructions);
+                      setCustomInstructions(tempInstructions);
+                      setSettingsSaved(true);
+                      setTimeout(() => setSettingsSaved(false), 2000);
+                    }}
+                    className="btn-p"
+                    style={{ background: "#F5F5F5", color: "#000", fontWeight: 600 }}
+                  >
+                    Save Instructions
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
         {view === "updates" && (
           <div className="fade-in" style={{ paddingTop: "60px" }}>
             <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginBottom: "20px", cursor: "pointer" }} onClick={() => setView("home")} className="btn-g">
@@ -1147,12 +1399,28 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.3.1</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.3.2</span>
                   <span className="tag tag-g">LATEST</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 07, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Settings Tab</strong> — New centralized Settings view accessible via the navigation bar.</li>
+                <li><strong>User API Keys</strong> — Moved away from a shared server key. Users now provide their own Groq API key securely saved in their browser's local storage.</li>
+                <li><strong>Custom Instructions</strong> — You can now save default custom AI instructions that will be injected into every prompt enhancement (e.g., preferred target audience or coding style).</li>
+                <li><strong>Key Validation</strong> — Added contextual alert banners to prompt users to enter a key if missing or invalid.</li>
+                <li><strong>Client-Side Architecture</strong> — Deleted the serverless API proxy resulting in direct, faster API requests from the browser to Groq.</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.3.1</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 05, 2026</span>
               </div>
-              <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <ul className="font-dm" style={{ color: "#888888", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
                 <li><strong>Skip All Fix</strong> — Fixed critical bug where skipping all clarifying questions produced an empty output. Now generates a best-effort enhanced prompt immediately.</li>
                 <li><strong>Smarter Questions</strong> — Clarifying questions are now domain-aware. Technical prompts ask about stack/tools, creative prompts ask about style constraints — no more generic "Who is the audience?"</li>
                 <li><strong>Deeper Conflict Analysis</strong> — The Mixer now decomposes complex role conflicts into all separable dimensions instead of surfacing just one shallow contradiction.</li>
@@ -1518,7 +1786,7 @@ export default function App() {
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.3.1</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.3.2</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
