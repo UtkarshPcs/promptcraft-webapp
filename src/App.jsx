@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle, Settings, AlertCircle } from "lucide-react";
+import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle, Settings, AlertCircle, ChevronDown } from "lucide-react";
+import ReactMarkdown from 'react-markdown';
+import removeMarkdown from 'remove-markdown';
 
 const SYSTEM_PROMPT = `# Prompt Enhancer Skill
 
@@ -335,7 +337,9 @@ export default function App() {
     return [];
   });
 
-  const [copied, setCopied] = useState(false); // Can be false, "text", or "txt"
+  const [copied, setCopied] = useState(false); // Can be false, "markdown", "plaintext", "md", or "txt"
+  const [showCopyDropdown, setShowCopyDropdown] = useState(false);
+  const [showDownloadDropdown, setShowDownloadDropdown] = useState(false);
   const [charCount, setCharCount] = useState(0);
   const [outputTokens, setOutputTokens] = useState(0);
   const textareaRef = useRef(null);
@@ -607,23 +611,33 @@ export default function App() {
   }
 
   // --- Export Actions ---
-  function handleCopy() {
-    navigator.clipboard.writeText(result?.enhancedPrompt || "");
-    setCopied("text");
+  function copyOptions(format) {
+    const text = result?.enhancedPrompt || "";
+    if (format === "markdown") {
+      navigator.clipboard.writeText(text);
+      setCopied("markdown");
+    } else {
+      navigator.clipboard.writeText(removeMarkdown(text));
+      setCopied("plaintext");
+    }
     setTimeout(() => setCopied(false), 2000);
+    setShowCopyDropdown(false);
   }
 
-  function downloadTxt() {
+  function downloadOptions(format) {
     const text = result?.enhancedPrompt || "";
-    const blob = new Blob([text], { type: "text/plain" });
+    const content = format === "markdown" ? text : removeMarkdown(text);
+    const filename = format === "markdown" ? "promptcraft-enhanced.md" : "promptcraft-enhanced.txt";
+    const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "promptcraft-enhanced.txt";
+    link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
-    setCopied("txt");
+    setCopied(format === "markdown" ? "md" : "txt");
     setTimeout(() => setCopied(false), 2000);
+    setShowDownloadDropdown(false);
   }
 
   return (
@@ -640,6 +654,27 @@ export default function App() {
         .font-sora { font-family: 'Sora', sans-serif; }
         .font-dm { font-family: 'DM Sans', sans-serif; }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+        .btn-dropdown {
+          background: transparent; border: none; padding: 10px 14px; color: #CCC; font-family: 'DM Sans', sans-serif; font-size: 13px;
+          border-radius: 4px; display: flex; align-items: center; justify-content: flex-start; cursor: pointer; transition: all 0.2s;
+          white-space: nowrap; width: 100%; text-align: left;
+        }
+        .btn-dropdown:hover { background: #1A1A1A; color: #FFF; }
+
+        .markdown-output { white-space: normal; }
+        .markdown-output h1, .markdown-output h2, .markdown-output h3 { color: #FFF; margin-top: 1.2em; margin-bottom: 0.6em; }
+        .markdown-output h1 { font-size: 1.4em; }
+        .markdown-output h2 { font-size: 1.2em; }
+        .markdown-output strong { color: #FFF; font-weight: 600; }
+        .markdown-output ul { margin-left: 1.5em; margin-bottom: 1em; list-style-type: disc; }
+        .markdown-output ol { margin-left: 1.5em; margin-bottom: 1em; list-style-type: decimal; }
+        .markdown-output p { margin-bottom: 1em; }
+        .markdown-output p:last-child { margin-bottom: 0; }
+        .markdown-output code { background: rgba(255,255,255,0.1); padding: 2px 4px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
+        .markdown-output pre code { background: transparent; padding: 0; font-size: 13px; }
+        .markdown-output pre { background: rgba(0,0,0,0.4); border: 1px solid #1A1A1A; padding: 12px; border-radius: 8px; overflow-x: auto; margin-bottom: 1em; }
+        .markdown-output blockquote { border-left: 3px solid #4DFFB4; padding-left: 12px; margin-left: 0; color: #aaa; font-style: italic; }
 
         .fade-in { animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
         .s1 { animation-delay: 0.05s; }
@@ -887,7 +922,7 @@ export default function App() {
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.4.0</span>
+            <span className="tag tag-g">v 1.4.1</span>
           </div>
         </div>
       </nav>
@@ -1113,20 +1148,41 @@ export default function App() {
                     </div>
 
                     <div style={{ display: "flex", gap: "8px" }}>
-                      <button className="btn-s" onClick={downloadTxt} title="Download .txt" style={{ padding: "0 14px" }}>
-                        {copied === "txt" ? <Check size={14} color="#4DFFB4" /> : <Download size={14} />}
-                      </button>
-                      <button className="btn-p" onClick={handleCopy} style={{ minWidth: "96px" }}>
-                        {copied === "text" ? <><Check size={13} />Copied!</> : <><Copy size={13} />Copy</>}
-                      </button>
+
+                      {/* Download Dropdown */}
+                      <div style={{ position: "relative" }}>
+                        <button className="btn-s" onClick={() => { setShowDownloadDropdown(!showDownloadDropdown); setShowCopyDropdown(false); }} title="Download" style={{ padding: "0 14px", height: "100%" }}>
+                          {copied === "md" || copied === "txt" ? <Check size={14} color="#4DFFB4" /> : <><Download size={14} /> <ChevronDown size={14} style={{ marginLeft: 4, opacity: 0.6 }} /></>}
+                        </button>
+                        {showDownloadDropdown && (
+                          <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "#111", border: "1px solid #333", borderRadius: "8px", padding: "6px", display: "flex", flexDirection: "column", gap: "2px", zIndex: 10, minWidth: "160px", boxShadow: "0 8px 16px rgba(0,0,0,0.6)" }}>
+                            <button className="btn-dropdown" onClick={() => downloadOptions("markdown")}>Download as .md</button>
+                            <button className="btn-dropdown" onClick={() => downloadOptions("plaintext")}>Download as .txt</button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Copy Dropdown */}
+                      <div style={{ position: "relative" }}>
+                        <button className="btn-p" onClick={() => { setShowCopyDropdown(!showCopyDropdown); setShowDownloadDropdown(false); }} style={{ minWidth: "120px", height: "100%" }}>
+                          {copied === "markdown" || copied === "plaintext" ? <><Check size={13} />Copied!</> : <><Copy size={13} />Copy <ChevronDown size={14} style={{ marginLeft: 4, opacity: 0.6 }} /></>}
+                        </button>
+                        {showCopyDropdown && (
+                          <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "#111", border: "1px solid #333", borderRadius: "8px", padding: "6px", display: "flex", flexDirection: "column", gap: "2px", zIndex: 10, minWidth: "180px", boxShadow: "0 8px 16px rgba(0,0,0,0.6)" }}>
+                            <button className="btn-dropdown" onClick={() => copyOptions("markdown")}>Copy as Markdown</button>
+                            <button className="btn-dropdown" onClick={() => copyOptions("plaintext")}>Copy as Plain Text</button>
+                          </div>
+                        )}
+                      </div>
+
                     </div>
                   </div>
 
                   <hr className="divider" style={{ marginBottom: "20px" }} />
 
-                  <p className="font-dm" style={{ fontSize: "15px", lineHeight: 1.8, color: "#CCCCCC", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                    {result.enhancedPrompt}
-                  </p>
+                  <div className="font-dm markdown-output" style={{ fontSize: "15px", lineHeight: 1.8, color: "#CCCCCC", wordBreak: "break-word" }}>
+                    <ReactMarkdown>{result.enhancedPrompt}</ReactMarkdown>
+                  </div>
 
                   {/* Output token count */}
                   {outputTokens > 0 && (
@@ -1456,8 +1512,21 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.4.0</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.4.1</span>
                   <span className="tag tag-g">LATEST</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 10, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Markdown Rendering</strong> — Rendered prompt output as properly formatted Markdown instead of raw text, turning headers and lists into visual structures.</li>
+                <li><strong>Export Formats</strong> — Replaced simple buttons with dropdown menus to allow "Copy as Markdown" vs "Copy as Plain Text" and "Download as .md" vs "Download as .txt".</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.4.0</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 10, 2026</span>
               </div>
@@ -1856,7 +1925,7 @@ export default function App() {
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.4.0</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.4.1</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
