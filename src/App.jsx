@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle, Settings, AlertCircle, ChevronDown, Mic, Loader2 } from "lucide-react";
+import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle, Settings, AlertCircle, ChevronDown, Mic, Loader2, X } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import removeMarkdown from 'remove-markdown';
 
@@ -551,6 +551,27 @@ Return only the cleaned transcript. Nothing else.`;
   useEffect(() => {
     localStorage.setItem("promptcraft_history", JSON.stringify(history));
   }, [history]);
+
+  useEffect(() => {
+    let timeout1, timeout2;
+    if (showApiKeyAlert) {
+      timeout1 = setTimeout(() => setShowApiKeyAlert(false), 10000);
+    }
+    if (apiKeyError) {
+      timeout2 = setTimeout(() => setApiKeyError(""), 10000);
+    }
+    return () => {
+      clearTimeout(timeout1);
+      clearTimeout(timeout2);
+    };
+  }, [showApiKeyAlert, apiKeyError]);
+
+  useEffect(() => {
+    if (apiKey) {
+      setShowApiKeyAlert(false);
+      setApiKeyError("");
+    }
+  }, [apiKey]);
 
   async function handleEnhance() {
     if (!input.trim()) return;
@@ -1109,7 +1130,7 @@ Return only the cleaned transcript. Nothing else.`;
 
         {/* ── API KEY ALERTS ── */}
         {showApiKeyAlert && (
-          <div style={{ backgroundColor: "rgba(255, 171, 0, 0.1)", border: "1px solid rgba(255, 171, 0, 0.3)", padding: "16px", borderRadius: "12px", marginBottom: "24px", marginTop: "24px", display: "flex", alignItems: "flex-start", gap: "12px" }}>
+          <div style={{ backgroundColor: "rgba(255, 171, 0, 0.1)", border: "1px solid rgba(255, 171, 0, 0.3)", padding: "16px", borderRadius: "12px", marginBottom: "24px", marginTop: "24px", display: "flex", alignItems: "flex-start", gap: "12px", position: "relative" }}>
             <AlertCircle size={20} color="#FFAB00" style={{ flexShrink: 0, marginTop: "2px" }} />
             <div style={{ flex: 1 }}>
               <h4 className="font-sora" style={{ color: "#FFAB00", fontSize: "15px", fontWeight: 600, marginBottom: "4px" }}>API Key Required</h4>
@@ -1117,14 +1138,17 @@ Return only the cleaned transcript. Nothing else.`;
                 You need a Groq API key to use PromptCraft. Your key is stored locally in your browser and never sent to our servers.
               </p>
             </div>
-            <button onClick={() => setView("settings")} style={{ background: "#FFAB00", color: "#000", border: "none", padding: "8px 16px", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer", alignSelf: "center", whiteSpace: "nowrap" }}>
+            <button onClick={() => setView("settings")} style={{ background: "#FFAB00", color: "#000", border: "none", padding: "8px 16px", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer", alignSelf: "center", whiteSpace: "nowrap", marginRight: "24px" }}>
               Go to Settings
+            </button>
+            <button onClick={() => setShowApiKeyAlert(false)} style={{ position: "absolute", top: "12px", right: "12px", background: "none", border: "none", color: "#FFAB00", cursor: "pointer", opacity: 0.7, padding: "4px" }}>
+              <X size={16} />
             </button>
           </div>
         )}
 
         {apiKeyError && (
-          <div style={{ backgroundColor: "rgba(255, 86, 86, 0.1)", border: "1px solid rgba(255, 86, 86, 0.3)", padding: "16px", borderRadius: "12px", marginBottom: "24px", marginTop: "24px", display: "flex", alignItems: "flex-start", gap: "12px" }}>
+          <div style={{ backgroundColor: "rgba(255, 86, 86, 0.1)", border: "1px solid rgba(255, 86, 86, 0.3)", padding: "16px", borderRadius: "12px", marginBottom: "24px", marginTop: "24px", display: "flex", alignItems: "flex-start", gap: "12px", position: "relative" }}>
             <AlertCircle size={20} color="#FF5656" style={{ flexShrink: 0, marginTop: "2px" }} />
             <div style={{ flex: 1 }}>
               <h4 className="font-sora" style={{ color: "#FF5656", fontSize: "15px", fontWeight: 600, marginBottom: "4px" }}>API Key Error</h4>
@@ -1132,8 +1156,11 @@ Return only the cleaned transcript. Nothing else.`;
                 {apiKeyError}
               </p>
             </div>
-            <button onClick={() => setView("settings")} style={{ background: "#FF5656", color: "#000", border: "none", padding: "8px 16px", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer", alignSelf: "center", whiteSpace: "nowrap" }}>
+            <button onClick={() => setView("settings")} style={{ background: "#FF5656", color: "#000", border: "none", padding: "8px 16px", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer", alignSelf: "center", whiteSpace: "nowrap", marginRight: "24px" }}>
               Check API Key
+            </button>
+            <button onClick={() => setApiKeyError("")} style={{ position: "absolute", top: "12px", right: "12px", background: "none", border: "none", color: "#FF5656", cursor: "pointer", opacity: 0.7, padding: "4px" }}>
+              <X size={16} />
             </button>
           </div>
         )}
