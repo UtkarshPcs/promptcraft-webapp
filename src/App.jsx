@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle, Settings, AlertCircle, ChevronDown } from "lucide-react";
+import { ArrowRight, Sparkles, RotateCcw, Copy, Check, ChevronRight, Zap, MessageSquare, Layers, Download, FileText, LayoutList, Wand2, Send, AlertTriangle, Blend, ArrowLeftRight, CheckCircle2, Circle, Settings, AlertCircle, ChevronDown, Mic, Loader2 } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import removeMarkdown from 'remove-markdown';
 
@@ -391,6 +391,154 @@ export default function App() {
   const [tempInstructions, setTempInstructions] = useState(customInstructions);
   const [tempModel, setTempModel] = useState(model);
 
+  const [whisperModel, setWhisperModel] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("promptcraft_whisperModel") || "whisper-large-v3";
+    }
+    return "whisper-large-v3";
+  });
+  const [tempWhisperModel, setTempWhisperModel] = useState(whisperModel);
+
+  const [micStatus, setMicStatus] = useState("idle"); // "idle" | "recording" | "processing" | "done"
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const [toastMessage, setToastMessage] = useState(null);
+
+  function showToast(msg) {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  }
+
+  async function handleMicClick() {
+    if (micStatus === "recording") {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+
+    if (!apiKey) {
+      showToast("Please add your Groq API key in Settings first.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      let recStartTime = Date.now();
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        const recDuration = Date.now() - recStartTime;
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        
+        if (recDuration < 1000 || audioBlob.size === 0) {
+          showToast("Recording too short. Please try again.");
+          setMicStatus("idle");
+          return;
+        }
+        await processAudio(audioBlob);
+      };
+
+      mediaRecorder.start();
+      setMicStatus("recording");
+    } catch (err) {
+      showToast("Microphone access denied. Please allow it in browser settings.");
+      setMicStatus("idle");
+    }
+  }
+
+  async function processAudio(blob) {
+    setMicStatus("processing");
+    try {
+      const formData = new FormData();
+      formData.append("file", blob, "audio.webm");
+      formData.append("model", whisperModel);
+      formData.append("response_format", "json");
+
+      const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: formData
+      });
+
+      if (!res.ok) {
+        throw new Error("TranscribeFail");
+      }
+      
+      const data = await res.json();
+      const rawTranscript = data.text;
+      
+      if (!rawTranscript) {
+        throw new Error("TranscribeFail");
+      }
+
+      const cleanupSysPrompt = `You are a transcript cleanup assistant. The user has spoken their thoughts out loud and you have received the raw transcript. Your job is to clean it up and return only the corrected version — nothing else. No explanations, no preamble, no labels.
+
+Follow these rules strictly:
+
+1. FILLER WORDS: Remove all filler words and sounds like "umm", "ahh", "uh", "like", "you know", "so basically", "I mean", etc.
+
+2. REPETITION: If the user repeated themselves or said something, then corrected it (e.g. "do this, no actually don't do this, do that instead"), remove the cancelled version. Keep only what the user finally meant.
+
+3. CONSOLIDATION: If the user mentioned pieces of the same idea at different points in their speech (e.g. mentioned a subject at the start, a price in the middle, and a detail at the end), bring all those pieces together into one clear, coherent sentence or paragraph. Do not leave related information scattered.
+
+4. MEANING: Under absolutely no circumstances should you change what the user actually meant. Do not add new information. Do not assume. Do not reinterpret. Only clean, consolidate, and restructure what was already said.
+
+5. STRUCTURE: Output clean, readable prose. Fix obvious grammar and spelling mistakes introduced by the transcription. Proper punctuation. No bullet points unless the user was clearly listing items.
+
+6. LENGTH: The output should be shorter than or equal to the input — never longer. You are compressing and clarifying, not expanding.
+
+Return only the cleaned transcript. Nothing else.`;
+
+      const cleanupRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: "system", content: cleanupSysPrompt },
+            { role: "user", content: rawTranscript }
+          ]
+        })
+      });
+
+      if (!cleanupRes.ok) {
+        setInput(prev => prev ? prev + "\n" + rawTranscript : rawTranscript);
+        showToast("Transcript received but cleanup failed. Raw transcript placed in box.");
+        setMicStatus("idle");
+        return;
+      }
+      
+      const cleanupData = await cleanupRes.json();
+      const cleanedText = cleanupData.choices?.[0]?.message?.content?.trim();
+      
+      if (cleanedText) {
+        setInput(prev => prev ? prev + "\n" + cleanedText : cleanedText);
+        setMicStatus("done");
+        setTimeout(() => setMicStatus("idle"), 2000);
+      } else {
+        setInput(prev => prev ? prev + "\n" + rawTranscript : rawTranscript);
+        showToast("Transcript received but cleanup failed. Raw transcript placed in box.");
+        setMicStatus("idle");
+      }
+      
+    } catch (err) {
+      showToast("Transcription failed. Check your API key or try again.");
+      setMicStatus("idle");
+    }
+  }
+
   useEffect(() => {
     if (textareaRef.current && view === "home") {
       textareaRef.current.style.height = "auto";
@@ -698,6 +846,24 @@ export default function App() {
           animation: savePulse 1.5s ease-out;
         }
 
+        @keyframes micPulse {
+          0% { box-shadow: 0 0 0 0 rgba(77, 255, 180, 0.4); }
+          70% { box-shadow: 0 0 0 10px rgba(77, 255, 180, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(77, 255, 180, 0); }
+        }
+        .mic-recording {
+          animation: micPulse 1.5s infinite;
+          background: rgba(77,255,180,0.2) !important;
+        }
+        
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .spinner {
+          animation: spin 1s linear infinite;
+        }
+
         .hero-bg {
           position: absolute; top: 0; left: 0; width: 100vw; height: 60vh;
           background: radial-gradient(ellipse at 50% -20%, rgba(77,255,180,0.1), transparent 60%);
@@ -908,6 +1074,18 @@ export default function App() {
         position: "sticky", top: 0, zIndex: 100,
         background: "rgba(10,10,10,0.85)", backdropFilter: "blur(12px)",
       }}>
+        {toastMessage && (
+          <div style={{ position: "fixed", bottom: "24px", left: "50%", transform: "translateX(-50%)", zIndex: 999 }}>
+            <div className="fade-in" style={{
+              background: "#111", border: "1px solid #333", borderRadius: "8px",
+              padding: "12px 20px", display: "flex", alignItems: "center", gap: "10px",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.8)"
+            }}>
+              <AlertCircle size={16} color="#4DFFB4" />
+              <span className="font-dm" style={{ fontSize: "14px", color: "#F5F5F5" }}>{toastMessage}</span>
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }} onClick={() => setView("home")}>
           <img src="/image-removebg-preview.png" alt="PromptCraft Header Logo" style={{ width: 22, height: 22, objectFit: "contain" }} />
           <span className="font-sora" style={{ fontSize: "15px", fontWeight: 600, color: "#F5F5F5", letterSpacing: "-0.025em" }}>PromptCraft</span>
@@ -922,7 +1100,7 @@ export default function App() {
           <button className="btn-g font-mono" style={{ fontSize: "11px", letterSpacing: "0.05em" }} onClick={() => setView("updates")}>CHANGELOG</button>
           <div style={{ display: "flex", gap: "8px" }}>
             <span className="tag">Microservices</span>
-            <span className="tag tag-g">v 1.4.1</span>
+            <span className="tag tag-g">v 1.5.0</span>
           </div>
         </div>
       </nav>
@@ -998,15 +1176,39 @@ export default function App() {
                   YOUR RAW INPUT
                 </div>
 
-                <textarea
-                  className="main-ta"
-                  ref={textareaRef}
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  placeholder={"write something for my newsletter...\nhelp me ask AI to review my code...\nmake a logo brief for my startup..."}
-                  onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleEnhance(); }}
-                  disabled={stage === "loading"}
-                />
+                <div style={{ position: "relative" }}>
+                  <textarea
+                    className="main-ta"
+                    ref={textareaRef}
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    placeholder={"write something for my newsletter...\nhelp me ask AI to review my code...\nmake a logo brief for my startup..."}
+                    onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleEnhance(); }}
+                    disabled={stage === "loading"}
+                    style={{ paddingBottom: "40px" }}
+                  />
+                  
+                  <div style={{ position: "absolute", bottom: "0px", right: "0px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    {micStatus === "recording" && <span style={{ color: "#4DFFB4", fontSize: "12px", fontFamily: "'DM Sans', sans-serif" }} className="fade-in">Recording...</span>}
+                    {micStatus === "processing" && <span style={{ color: "#4DFFB4", fontSize: "12px", fontFamily: "'DM Sans', sans-serif" }} className="fade-in">Transcribing...</span>}
+                    <button 
+                      onClick={handleMicClick}
+                      className={micStatus === "recording" ? "mic-recording" : ""}
+                      title={micStatus === "idle" ? "Record voice input" : undefined}
+                      style={{ 
+                        width: "36px", height: "36px", borderRadius: "50%", border: "none", 
+                        background: micStatus === "done" ? "#4DFFB4" : "rgba(77,255,180,0.1)", 
+                        color: micStatus === "done" ? "#000" : "#4DFFB4", 
+                        display: "flex", alignItems: "center", justifyContent: "center", cursor: micStatus === "processing" ? "not-allowed" : "pointer",
+                        transition: "all 0.2s",
+                        opacity: micStatus === "processing" ? 0.7 : 1
+                      }}
+                      disabled={micStatus === "processing"}
+                    >
+                      {micStatus === "processing" ? <Loader2 size={16} className="spinner" /> : (micStatus === "done" ? <Check size={16} /> : <Mic size={16} />)}
+                    </button>
+                  </div>
+                </div>
 
                 <hr className="divider" style={{ margin: "20px 0" }} />
 
@@ -1384,6 +1586,20 @@ export default function App() {
                         style={{ width: "100%" }}
                       />
                     </div>
+
+                    <div style={{ position: "relative" }}>
+                      <label style={{ display: "block", color: "#888", fontSize: "12px", marginBottom: "4px" }}>Whisper Model</label>
+                      <select
+                        value={tempWhisperModel}
+                        onChange={(e) => setTempWhisperModel(e.target.value)}
+                        className="font-mono text-in"
+                        style={{ width: "100%", paddingRight: "32px", appearance: "none", cursor: "pointer" }}
+                      >
+                        <option value="whisper-large-v3">whisper-large-v3</option>
+                        <option value="whisper-large-v3-turbo">whisper-large-v3-turbo</option>
+                      </select>
+                      <ChevronDown size={14} color="#666" style={{ position: "absolute", right: "12px", top: "70%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                    </div>
                   </div>
 
                   <button
@@ -1397,6 +1613,10 @@ export default function App() {
                           localStorage.setItem("promptcraft_model", tempModel.trim());
                           setModel(tempModel.trim());
                         }
+                        
+                        localStorage.setItem("promptcraft_whisperModel", tempWhisperModel);
+                        setWhisperModel(tempWhisperModel);
+                        
                         setSettingsSaved(true);
                         setTimeout(() => setSettingsSaved(false), 2500);
                       }
@@ -1512,12 +1732,25 @@ export default function App() {
             <div className="card" style={{ padding: "32px", marginBottom: "24px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.4.1</span>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#4DFFB4", fontWeight: 600 }}>v 1.5.0</span>
                   <span className="tag tag-g">LATEST</span>
+                </div>
+                <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 11, 2026</span>
+              </div>
+              <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <li><strong>Voice Input</strong> — Dictate your prompt using the new mic button (bottom right of input box). Thoughts are transcribed and structured automatically via Groq Whisper models.</li>
+                <li><strong>Whisper Models</strong> — Added configuration setting to switch between `whisper-large-v3` and `whisper-large-v3-turbo` models.</li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: "32px", borderColor: "#181818", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span className="font-sora" style={{ fontSize: "20px", color: "#F5F5F5", fontWeight: 600 }}>v 1.4.1</span>
                 </div>
                 <span className="font-mono" style={{ fontSize: "11px", color: "#444" }}>MAR 10, 2026</span>
               </div>
-              <ul className="font-dm" style={{ color: "#CCCCCC", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <ul className="font-dm" style={{ color: "#888888", fontSize: "15px", lineHeight: 1.8, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
                 <li><strong>Markdown Rendering</strong> — Rendered prompt output as properly formatted Markdown instead of raw text, turning headers and lists into visual structures.</li>
                 <li><strong>Export Formats</strong> — Replaced simple buttons with dropdown menus to allow "Copy as Markdown" vs "Copy as Plain Text" and "Download as .md" vs "Download as .txt".</li>
               </ul>
@@ -1925,7 +2158,7 @@ export default function App() {
         {/* ── FOOTER ── */}
         <div style={{ marginTop: "80px", paddingTop: "24px", borderTop: "1px solid #141414", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.4.1</span>
+            <span className="font-mono" style={{ fontSize: "11px", color: "#444", letterSpacing: "0.08em" }}>PROMPTCRAFT · v1.5.0</span>
             <span className="font-dm" style={{ fontSize: "11px", color: "#333", display: "flex", alignItems: "center", gap: "4px" }}>
               Made by <span style={{ color: "#666", fontWeight: 500 }}>Utkarsh AI dev</span>
             </span>
